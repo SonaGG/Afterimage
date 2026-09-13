@@ -9,6 +9,9 @@ import gg.sona.recast.clip.export.ExportProgress
 import gg.sona.recast.clip.export.ExportQueue
 import gg.sona.recast.mc.ui.WorkspaceHost
 import gg.sona.recast.render.*
+import gg.sona.recast.render.ffmpeg.AudioFileDecoder
+import gg.sona.recast.render.ffmpeg.AudioMuxer
+import gg.sona.recast.render.ffmpeg.FfmpegRuntime
 import gg.sona.recast.render.sink.*
 import gg.sona.recast.replay.session.ReplaySession
 import net.minecraft.client.Minecraft
@@ -38,7 +41,7 @@ class FramebufferExporter(
     private val replay: () -> ReplaySession?,
     private val camera: CameraDriver,
     private val workspace: WorkspaceHost,
-    private val ffmpeg: FfmpegTools,
+    private val ffmpeg: FfmpegRuntime,
 ) : ExportBackend, FrameSource, MainThreadExecutor {
 
     private class FrameRequest(val action: () -> Any?, val latch: CountDownLatch) {
@@ -82,7 +85,7 @@ class FramebufferExporter(
 
     override val windowHeight: Int get() = if (frameActive) savedHeight else minecraft.height
 
-    override val ffmpegExecutable: String get() = ffmpeg.executable
+    override val ffmpegPath: String get() = ffmpeg.directory.toString()
 
     override val ffmpegAvailable: Boolean get() = ffmpeg.available
 
@@ -91,8 +94,6 @@ class FramebufferExporter(
     override val ffmpegVersion: String? get() = ffmpeg.version
 
     override fun encoders(): Set<String> = ffmpeg.encoders()
-
-    override fun relocateFfmpeg(): Boolean = ffmpeg.locate()
 
     override fun downloadFfmpeg(): ExportHandle = exports.submit(ffmpeg.downloadJob())
 
@@ -137,11 +138,7 @@ class FramebufferExporter(
 
             settings.format == ExportFormat.JPEG_SEQUENCE -> JpegSequenceSink(folder, settings.jpegQuality)
             request.target == ExportTarget.PNG_SEQUENCE -> PngSequenceSink(folder)
-            else -> FfmpegPipeSink(
-                ffmpegExecutable,
-                settings.audioFile?.let { FileAudioSource(it, settings.audioOffsetSeconds, settings.audioVolume) },
-                ffmpeg.encoders()
-            )
+            else -> LibavVideoSink(ffmpeg.encoders())
         }
         val poseSource = PoseSource { nanos -> camera.exportPoseAt(nanos) }
         val pipeline = ExportPipeline(settings, session, poseSource, this, AsyncFrameSink(sink), this)
@@ -155,7 +152,7 @@ class FramebufferExporter(
             override fun run(report: ExportProgress): Path {
                 try {
                     val rendered = render.run(report)
-                    if (settings.gameAudio && !pipeline.cancelled) finishGameAudio(settings, rendered, report)
+                    if (!pipeline.cancelled) finishAudio(settings, rendered, report)
                     return rendered
                 } finally {
                     reservedOutputs.remove(output.toAbsolutePath())
@@ -166,53 +163,44 @@ class FramebufferExporter(
         })
     }
 
-    private fun finishGameAudio(settings: ExportSettings, output: Path, report: ExportProgress) {
-        val events = sounds.drain()
-        if (events.isEmpty()) return
+    private fun finishAudio(settings: ExportSettings, output: Path, report: ExportProgress) {
+        val events = if (settings.gameAudio) sounds.drain() else emptyList()
+        val file = settings.audioFile?.takeIf { settings.format.supportsAudio }
+        if (events.isEmpty() && file == null) return
         val base = output.fileName.toString().substringBeforeLast('.')
         val wav = output.resolveSibling("$base.wav")
         try {
-            report.detail("mixing game audio · ${events.size} sounds")
+            if (events.isNotEmpty()) report.detail("mixing game audio · ${events.size} sounds")
             val mix = GameAudioMixer.mix(
                 events,
                 settings.outputDurationNanos + settings.frameIntervalNanos,
                 { sounds.clip(it) },
                 settings.gameAudioVolume.toFloat()
             )
-            GameAudioMixer.writeWav(mix, wav)
+            if (events.isNotEmpty()) GameAudioMixer.writeWav(mix, wav)
             if (!settings.format.needsFfmpeg || !settings.format.supportsAudio || !ffmpeg.available) return
-            report.detail("muxing game audio")
+            if (file != null) {
+                report.detail("decoding ${file.fileName}")
+                AudioFileDecoder.mixInto(mix, file, settings.audioOffsetSeconds, settings.audioVolume)
+            }
+            ExportEncoding.applyAudioFades(mix, settings)
+            report.detail("muxing audio")
             val muxed = output.resolveSibling("$base.audio-tmp.${settings.format.extension}")
-            val arguments = GameAudioMixer.muxArguments(
-                ffmpeg.executable,
-                output,
-                wav,
-                muxed,
-                settings.format,
-                settings.includeAudio && settings.audioFile != null
-            )
-            val process = ProcessBuilder(arguments).redirectErrorStream(true).start()
-            val log = process.inputStream.bufferedReader().readText()
-            val finished = process.waitFor(10, TimeUnit.MINUTES)
-            if (!finished) process.destroyForcibly()
-            if (finished && process.exitValue() == 0 && Files.exists(muxed)) {
+            try {
+                AudioMuxer(mix, settings.format).mux(output, muxed, ExportEncoding.containerOptions(settings))
                 Files.move(muxed, output, StandardCopyOption.REPLACE_EXISTING)
                 Files.deleteIfExists(wav)
-            } else {
+            } catch (error: Throwable) {
                 Files.deleteIfExists(muxed)
-                logger.warn(
-                    "Recast could not mux game audio into {}; kept {} ({})",
-                    output,
-                    wav,
-                    log.trim().lines().firstOrNull() ?: "no output"
-                )
+                logger.warn("Recast could not mux audio into {}", output, error)
             }
         } catch (error: Throwable) {
-            logger.warn("Recast could not render game audio for {}", output, error)
+            logger.warn("Recast could not render audio for {}", output, error)
         } finally {
             sounds.clips.clear()
         }
     }
+
 
     override fun prepare(settings: ExportSettings) {
         this.settings = settings

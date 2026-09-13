@@ -10,15 +10,13 @@ interface ExportBackend {
 
     val ffmpegAvailable: Boolean
 
-    val ffmpegExecutable: String
+    val ffmpegPath: String
 
     val ffmpegDownloadSupported: Boolean
 
     val ffmpegVersion: String?
 
     fun encoders(): Set<String>
-
-    fun relocateFfmpeg(): Boolean
 
     fun downloadFfmpeg(): ExportHandle?
 

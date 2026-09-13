@@ -33,7 +33,6 @@ data class ExportSettings(
     val gifDither: String = "sierra2_4a",
     val proresProfile: Int = 3,
     val jpegQuality: Int = 92,
-    val extraArguments: List<String> = emptyList(),
     val fadeInSeconds: Double = 0.0,
     val fadeOutSeconds: Double = 0.0,
     val waitForChunks: Boolean = true,

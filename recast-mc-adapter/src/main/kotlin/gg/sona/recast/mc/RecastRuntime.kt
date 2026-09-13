@@ -22,6 +22,7 @@ import gg.sona.recast.format.RecastReader
 import gg.sona.recast.mc.mixin.*
 import gg.sona.recast.mc.taskbar.TaskbarManager
 import gg.sona.recast.mc.ui.WorkspaceHost
+import gg.sona.recast.render.ffmpeg.FfmpegRuntime
 import gg.sona.recast.replay.session.ReplaySession
 import gg.sona.recast.replay.source.FileReplaySource
 import gg.sona.recast.replay.state.shadow.EntityKind
@@ -58,7 +59,7 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
     val replayer = ReplayController(platform, cameraDriver)
     val workspace = WorkspaceHost(minecraft, platform.root.resolve("recast-workspace.ini"))
     val keybinds = RecastKeybinds(minecraft)
-    val ffmpeg = FfmpegTools(platform.root)
+    val ffmpeg = FfmpegRuntime(platform.root)
     val exporter = FramebufferExporter(minecraft, exports, { replayer.session }, cameraDriver, workspace, ffmpeg)
     val gizmoRenderer = GizmoRenderer(minecraft)
     override val gizmos = GizmoBatch()
@@ -244,7 +245,7 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
         RecastLog.sink = Log4jSink
         PanelLog.sink = { message, error -> logger.error(message, error) }
         Thread({ recordings.repairAll() }, "recast-repair").apply { isDaemon = true }.start()
-        Thread({ if (ffmpeg.locate()) ffmpeg.probeEncoders() }, "recast-ffmpeg").apply { isDaemon = true }.start()
+        Thread({ if (ffmpeg.load()) ffmpeg.probeEncoders() }, "recast-ffmpeg").apply { isDaemon = true }.start()
         workspace.bind(context)
         recorder.autoRecord = settings.autoRecord
         replayer.matchRecordedViewDistance = settings.matchRecordedViewDistance

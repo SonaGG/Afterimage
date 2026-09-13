@@ -8,6 +8,8 @@ legacy-lwjgl3 = "1.4.1"
 joml = "1.10.8"
 imgui = "1.89.0"
 zstd = "1.5.7-16"
+javacpp = "1.5.14"
+javacpp-ffmpeg = "8.1.2-1.5.14"
 osl = "0.17.1"
 devauth = "1.2.2"
 
@@ -19,6 +21,8 @@ legacy-lwjgl3 = { module = "io.github.moehreag:legacy-lwjgl3", version.ref = "le
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 joml = { module = "org.joml:joml", version.ref = "joml" }
 zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
+javacpp-core = { module = "org.bytedeco:javacpp", version.ref = "javacpp" }
+javacpp-ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "javacpp-ffmpeg" }
 
 imgui-binding = { module = "io.github.spair:imgui-java-binding", version.ref = "imgui" }
 imgui-lwjgl3 = { module = "io.github.spair:imgui-java-lwjgl3", version.ref = "imgui" }

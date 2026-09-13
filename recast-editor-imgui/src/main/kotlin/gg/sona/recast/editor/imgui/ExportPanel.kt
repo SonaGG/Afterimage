@@ -336,7 +336,7 @@ class ExportPanel(private val context: EditorContext) :
             ImGui.sameLine()
             ImGui.alignTextToFramePadding()
             Widgets.mutedText("open folder")
-            val estimate = FfmpegCommand.estimateBytes(buildSettings(session, start, end, mapping, draft = false))
+            val estimate = ExportEncoding.estimateBytes(buildSettings(session, start, end, mapping, draft = false))
             Widgets.property("Estimate")
             Widgets.smallText(
                 "~${formatSize(estimate)}    ${TimeFormat.clock(outputNanosFor(mapping, start, end))}",
@@ -386,7 +386,7 @@ class ExportPanel(private val context: EditorContext) :
                             Widgets.doubleDrag("##size", targetMegabytes, 0.5f, "%.0f MB", 1f, 100000f)
                                 ?.let { targetMegabytes = it }
                             ImGui.sameLine()
-                            val kbps = FfmpegCommand.bitrateForSize(
+                            val kbps = ExportEncoding.bitrateForSize(
                                 (targetMegabytes * 1_000_000).toLong(),
                                 buildSettings(session, start, end, null, draft = false)
                             )
@@ -473,10 +473,10 @@ class ExportPanel(private val context: EditorContext) :
             .firstOrNull { it.job.name == "download ffmpeg" && (it.state == ExportState.RUNNING || it.state == ExportState.QUEUED) }
         if (backend.ffmpegAvailable) {
             Widgets.smallText("ffmpeg ${backend.ffmpegVersion ?: ""}", EditorTheme.TEXT_DIM.u32, clipToWidth = true)
-            Widgets.tooltip(backend.ffmpegExecutable)
+            Widgets.tooltip(backend.ffmpegPath)
             return
         }
-        Widgets.pill("ffmpeg not found", EditorTheme.WARNING)
+        Widgets.pill("ffmpeg not installed", EditorTheme.WARNING)
         ImGui.sameLine()
         if (downloading != null) {
             Widgets.progress(downloading.progress.toFloat(), -1f, downloading.detail.ifBlank { "downloading" })
@@ -487,13 +487,8 @@ class ExportPanel(private val context: EditorContext) :
                 backend.downloadFfmpeg()
                 context.status("Downloading ffmpeg")
             }
-            Widgets.tooltip("Downloads a static ffmpeg build for this system into the recast/ffmpeg folder")
-            ImGui.sameLine()
+            Widgets.tooltip("Downloads the ffmpeg libraries for this system (about 35 MB) into the recast/ffmpeg folder")
         }
-        if (Widgets.ghostButton("Locate")) {
-            if (backend.relocateFfmpeg()) context.status("Found ffmpeg ${backend.ffmpegVersion}") else context.status("ffmpeg still not found; install it or set RECAST_FFMPEG")
-        }
-        Widgets.tooltip("Search PATH and common install folders again")
         Widgets.wrappedText(
             "Videos need ffmpeg. Without it you can still export PNG or JPEG frames.",
             EditorTheme.TEXT_DIM.u32
@@ -710,7 +705,7 @@ class ExportPanel(private val context: EditorContext) :
             fadeOutSeconds = if (draft) 0.0 else fadeOut,
         )
         if (base.qualityMode != QualityMode.BITRATE) return base
-        val kbps = if (sizeMode) FfmpegCommand.bitrateForSize(
+        val kbps = if (sizeMode) ExportEncoding.bitrateForSize(
             (targetMegabytes * 1_000_000).toLong(),
             base
         ) else (bitrateMbps * 1000).toInt()

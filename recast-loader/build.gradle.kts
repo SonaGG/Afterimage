@@ -68,6 +68,8 @@ dependencies {
     bundled(kotlin("stdlib"))
     bundled(libs.joml.get().toString())
     bundled(libs.zstd.jni.get().toString())
+    bundled(libs.javacpp.core.get().toString())
+    bundled(libs.javacpp.ffmpeg.get().toString())
     bundled(libs.imgui.binding.get().toString())
     bundled(libs.imgui.natives.windows.get().toString())
     bundled(libs.imgui.natives.linux.get().toString())

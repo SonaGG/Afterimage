@@ -1,4 +1,4 @@
-package gg.sona.recast.mc
+package gg.sona.recast.render.ffmpeg
 
 import gg.sona.recast.clip.export.ExportJob
 import gg.sona.recast.clip.export.ExportProgress
@@ -37,35 +37,38 @@ class FfmpegDownloadJob(
 
     override fun run(report: ExportProgress): Path {
         val staging = directory.resolveSibling("${directory.name}.part")
-        report.detail("connecting")
         val client = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
             .connectTimeout(Duration.ofSeconds(15))
             .build()
-        val request = HttpRequest.newBuilder(URI.create(build.url))
-            .header("User-Agent", "Recast")
-            .timeout(Duration.ofSeconds(30))
-            .build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
-        check(response.statusCode() == 200) { "download failed with HTTP ${response.statusCode()}" }
-        val length = response.headers().firstValueAsLong("Content-Length").orElse(-1L)
         try {
-            if (cancelled) throw InterruptedIOException("download cancelled")
             if (Files.exists(staging)) staging.deleteRecursively()
             Files.createDirectories(staging)
-            val stream = response.body().also { body = it }
-            var extracted = 0
-            ZipInputStream(BufferedInputStream(Progress(stream, length, report), 1 shl 16)).use { zip ->
-                for (entry in generateSequence { zip.nextEntry }) {
-                    if (entry.isDirectory || !entry.name.startsWith(build.prefix)) continue
-                    val file = entry.name.removePrefix(build.prefix)
-                    if ('/' in file || file.startsWith("jni")) continue
-                    Files.copy(zip, staging.resolve(file), StandardCopyOption.REPLACE_EXISTING)
-                    extracted++
+            for ((index, archive) in build.archives.withIndex()) {
+                if (cancelled) throw InterruptedIOException("download cancelled")
+                report.detail("connecting")
+                val request = HttpRequest.newBuilder(URI.create(archive.url))
+                    .header("User-Agent", "Recast")
+                    .timeout(Duration.ofSeconds(30))
+                    .build()
+                val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+                check(response.statusCode() == 200) { "download failed with HTTP ${response.statusCode()}" }
+                val length = response.headers().firstValueAsLong("Content-Length").orElse(-1L)
+                val stream = response.body().also { body = it }
+                val progress = Progress(stream, length, report, index.toDouble() / build.archives.size, 1.0 / build.archives.size)
+                var extracted = 0
+                ZipInputStream(BufferedInputStream(progress, 1 shl 16)).use { zip ->
+                    for (entry in generateSequence { zip.nextEntry }) {
+                        if (entry.isDirectory || !entry.name.startsWith(archive.prefix)) continue
+                        val file = entry.name.removePrefix(archive.prefix)
+                        if ('/' in file) continue
+                        Files.copy(zip, staging.resolve(file), StandardCopyOption.REPLACE_EXISTING)
+                        extracted++
+                    }
                 }
+                body = null
+                check(extracted > 0) { "the downloaded archive did not contain ${archive.prefix}" }
             }
-            check(extracted > 0) { "the downloaded archive did not contain ${build.prefix}" }
-            staging.resolve(build.binary).toFile().setExecutable(true, false)
             if (Files.exists(directory)) directory.deleteRecursively()
             Files.move(staging, directory, StandardCopyOption.ATOMIC_MOVE)
         } finally {
@@ -73,7 +76,7 @@ class FfmpegDownloadJob(
             if (Files.exists(staging)) staging.deleteRecursively()
         }
         report.progress(0.95)
-        report.detail("ready: ${install(directory.resolve(build.binary))}")
+        report.detail("ready: ${install(directory)}")
         return directory
     }
 
@@ -82,8 +85,13 @@ class FfmpegDownloadJob(
         runCatching { body?.close() }
     }
 
-    private inner class Progress(source: InputStream, private val length: Long, private val report: ExportProgress) :
-        FilterInputStream(source) {
+    private inner class Progress(
+        source: InputStream,
+        private val length: Long,
+        private val report: ExportProgress,
+        private val base: Double,
+        private val share: Double,
+    ) : FilterInputStream(source) {
         private var total = 0L
         private var reported = 0L
 
@@ -105,7 +113,7 @@ class FfmpegDownloadJob(
             if (total - reported < 1 shl 20) return
             reported = total
             if (length > 0) {
-                report.progress((total.toDouble() / length * 0.9).coerceIn(0.0, 0.9))
+                report.progress(((base + total.toDouble() / length * share) * 0.9).coerceIn(0.0, 0.9))
                 report.detail(String.format("downloading %.0f / %.0f MB", total / 1048576.0, length / 1048576.0))
             } else {
                 report.detail(String.format("downloading %.0f MB", total / 1048576.0))

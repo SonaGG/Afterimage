@@ -115,13 +115,11 @@ class SettingsPanel(private val context: EditorContext) : DialogPanel("Settings"
                 Widgets.property("ffmpeg")
                 if (backend.ffmpegAvailable) {
                     Widgets.smallText(backend.ffmpegVersion ?: "found", EditorTheme.TEXT_DIM.u32, clipToWidth = true)
-                    Widgets.tooltip(backend.ffmpegExecutable.toString())
+                    Widgets.tooltip(backend.ffmpegPath)
                 } else {
-                    Widgets.pill("not found", EditorTheme.WARNING)
+                    Widgets.pill("not installed", EditorTheme.WARNING)
                     ImGui.sameLine()
                     if (backend.ffmpegDownloadSupported && Widgets.accentButton("Download")) backend.downloadFfmpeg()
-                    ImGui.sameLine()
-                    if (Widgets.ghostButton("Locate")) backend.relocateFfmpeg()
                 }
                 val hardware =
                     backend.encoders().filter { it.endsWith("_nvenc") || it.endsWith("_amf") || it.endsWith("_qsv") }
