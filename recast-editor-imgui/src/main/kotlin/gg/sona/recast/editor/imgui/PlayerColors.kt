@@ -1,0 +1,17 @@
+package gg.sona.recast.editor.imgui
+
+import gg.sona.recast.index.ReplayIndex
+
+object PlayerColors {
+    val PALETTE = listOf(
+        EditorTheme.Rgb(0xFF9F0A), EditorTheme.Rgb(0x30D158), EditorTheme.Rgb(0xBF5AF2), EditorTheme.Rgb(0x64D2FF),
+        EditorTheme.Rgb(0xFF375F), EditorTheme.Rgb(0xFFD60A), EditorTheme.Rgb(0x5E5CE6), EditorTheme.Rgb(0xAC8E68),
+    )
+
+    fun of(index: ReplayIndex, name: String, isRecorder: Boolean): EditorTheme.Rgb {
+        if (isRecorder) return EditorTheme.ACCENT_TEXT
+        val others = index.playerNames.filter { candidate -> index.resolve(candidate).none { it.isRecorder } }
+        val position = others.indexOf(name)
+        return PALETTE[(if (position >= 0) position else name.hashCode() and 0x7fffffff) % PALETTE.size]
+    }
+}

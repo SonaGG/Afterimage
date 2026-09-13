@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "recast-adapter",
+  "version": "${version}",
+  "name": "Recast Adapter",
+  "description": "Minecraft bindings for the Recast recording and replay framework.",
+  "authors": [
+    {
+      "name": "Sona Interactive, Inc.",
+      "contact": {
+        "email": "company@cloverclient.com"
+      }
+    }
+  ],
+  "license": "ARR",
+  "environment": "client",
+  "mixins": [
+    "recast-adapter.mixins.json"
+  ],
+  "accessWidener": "recast-adapter.accesswidener",
+  "depends": {
+    "minecraft": "1.8.9",
+    "fabricloader": ">=0.15.0"
+  }
+}

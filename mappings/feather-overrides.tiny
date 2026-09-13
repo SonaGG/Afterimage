@@ -1,0 +1,7 @@
+tiny	2	0	intermediary	named
+c	net/minecraft/unmapped/C_74425583	net/minecraft/entity/living/LivingEntity
+	f	F	f_12506421	jumpMovementFactor
+c	net/minecraft/unmapped/C_40996800	net/minecraft/entity/living/player/PlayerEntity
+	f	F	f_76552083	speedInAir
+c	net/minecraft/unmapped/C_35369014	net/minecraft/network/PacketFlow
+	f	Lnet/minecraft/unmapped/C_35369014;	f_38007858	CLIENTBOUND
