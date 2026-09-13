@@ -121,6 +121,7 @@ class ShadowLocalPlayer {
         sprinting = false
         vehicleId = -1
         cameraEntityId = -1
+        effects.clear()
     }
 
     fun clear() {
@@ -142,7 +143,6 @@ class ShadowLocalPlayer {
         health = 20f
         food = 20
         saturation = 5f
-        effects.clear()
         metadata.clear()
         resetForRespawn()
     }
