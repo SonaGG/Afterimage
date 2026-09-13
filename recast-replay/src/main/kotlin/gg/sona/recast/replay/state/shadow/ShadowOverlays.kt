@@ -2,6 +2,9 @@ package gg.sona.recast.replay.state.shadow
 
 import gg.sona.recast.core.time.Nanos
 import gg.sona.recast.protocol.ChatMessage
+import gg.sona.recast.protocol.OverlayChatLine
+import gg.sona.recast.protocol.OverlayReset
+import gg.sona.recast.protocol.PlayPacket
 import gg.sona.recast.protocol.Title
 
 class ShadowOverlays {
@@ -22,6 +25,9 @@ class ShadowOverlays {
     fun visibleChat(nanos: Long, windowNanos: Long = CHAT_VISIBLE_NANOS): List<ChatLine> =
         chat.filter { it.nanos <= nanos && nanos - it.nanos <= windowNanos }
 
+    fun visibleActionBar(nanos: Long): ChatLine? =
+        actionBar?.takeIf { it.nanos <= nanos && nanos - it.nanos <= ACTION_BAR_NANOS }
+
     fun apply(packet: ChatMessage, nanos: Long) {
         if (packet.position == ACTION_BAR) {
             actionBar = ChatLine(nanos, packet.json)
@@ -34,18 +40,25 @@ class ShadowOverlays {
     fun apply(packet: Title, nanos: Long) {
         when (packet.action) {
             Title.SET_TITLE -> {
-                titleJson = packet.textJson
+                titleJson = packet.textJson ?: EMPTY_TEXT
                 titleShownAt = nanos
             }
 
-            Title.SET_SUBTITLE -> subtitleJson = packet.textJson
+            Title.SET_SUBTITLE -> subtitleJson = packet.textJson ?: EMPTY_TEXT
             Title.SET_TIMES -> {
-                fadeIn = packet.fadeIn
-                stay = packet.stay
-                fadeOut = packet.fadeOut
+                val active = title.activeAt(nanos)
+                if (packet.fadeIn >= 0) fadeIn = packet.fadeIn
+                if (packet.stay >= 0) stay = packet.stay
+                if (packet.fadeOut >= 0) fadeOut = packet.fadeOut
+                if (active) titleShownAt = nanos
             }
 
-            Title.HIDE -> titleShownAt = Long.MIN_VALUE
+            Title.HIDE -> {
+                titleJson = null
+                subtitleJson = null
+                titleShownAt = Long.MIN_VALUE
+            }
+
             Title.RESET -> {
                 titleJson = null
                 subtitleJson = null
@@ -55,6 +68,41 @@ class ShadowOverlays {
                 titleShownAt = Long.MIN_VALUE
             }
         }
+    }
+
+    fun apply(packet: OverlayReset, nanos: Long) {
+        if (packet.resetsChat) {
+            chat.clear()
+            for (line in packet.chat.sortedByDescending { it.ageNanos }) chat.addLast(ChatLine(nanos - line.ageNanos, line.json))
+        }
+        if (packet.resetsTitle) {
+            titleShownAt = if (packet.titleAgeNanos < 0 || titleJson == null) Long.MIN_VALUE else nanos - packet.titleAgeNanos
+        }
+        if (packet.resetsActionBar) {
+            val bar = actionBar
+            actionBar = if (packet.actionBarAgeNanos < 0 || bar == null) null else ChatLine(nanos - packet.actionBarAgeNanos, bar.json)
+        }
+    }
+
+    fun snapshot(nanos: Long): List<PlayPacket> {
+        val lines = chat.filter { it.nanos <= nanos }
+        val bar = visibleActionBar(nanos)
+        val current = title
+        val titleActive = current.activeAt(nanos)
+        val out = ArrayList<PlayPacket>(5)
+        bar?.let { out += ChatMessage(it.json, ACTION_BAR) }
+        if (titleActive) {
+            out += Title(Title.SET_TIMES, null, current.fadeIn, current.stay, current.fadeOut)
+            out += Title(Title.SET_SUBTITLE, current.subtitleJson ?: EMPTY_TEXT, 0, 0, 0)
+            out += Title(Title.SET_TITLE, current.titleJson, 0, 0, 0)
+        }
+        out += OverlayReset(
+            OverlayReset.CHAT or OverlayReset.TITLE or OverlayReset.ACTION_BAR,
+            lines.map { OverlayChatLine(nanos - it.nanos, it.json) },
+            if (titleActive) nanos - current.shownAtNanos else OverlayReset.NONE,
+            if (bar != null) nanos - bar.nanos else OverlayReset.NONE
+        )
+        return out
     }
 
     fun clear() {
@@ -74,6 +122,7 @@ class ShadowOverlays {
         const val DEFAULT_FADE_IN = 10
         const val DEFAULT_STAY = 70
         const val DEFAULT_FADE_OUT = 20
+        const val EMPTY_TEXT = "{\"text\":\"\"}"
         val CHAT_VISIBLE_NANOS: Long = Nanos.ofSeconds(10)
         val ACTION_BAR_NANOS: Long = Nanos.ofSeconds(3)
     }

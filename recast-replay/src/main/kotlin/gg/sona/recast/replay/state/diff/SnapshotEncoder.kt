@@ -54,6 +54,7 @@ object SnapshotEncoder {
         result += out
         if (player.screen.isOpen) result += player.screen
         player.target?.let { result += it }
+        result += client.overlays.snapshot(nanos)
         return result
     }
 

@@ -67,6 +67,7 @@ class ShadowClient(identity: RecorderIdentity = RecorderIdentity.UNKNOWN) : Stat
             is JoinGame -> joinGame(packet)
             is ChatMessage -> overlays.apply(packet, nanos)
             is Title -> overlays.apply(packet, nanos)
+            is OverlayReset -> overlays.apply(packet, nanos)
             is Respawn -> respawn(packet)
             is TimeUpdate -> {
                 world.worldAge = packet.worldAge

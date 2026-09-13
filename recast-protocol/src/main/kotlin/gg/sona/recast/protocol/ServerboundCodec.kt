@@ -95,9 +95,7 @@ object ServerboundCodec {
 
         RecastInternal.CAMERA_FRAME -> readCameraFrame(reader)
         RecastInternal.CAMERA_FRAME_COMPACT -> readCompactCameraFrame(reader)
-        RecastInternal.OVERLAY_RESET -> OverlayReset(
-            reader.readVarInt(),
-            List(reader.readVarInt()) { OverlayChatLine(reader.readVarLong(), reader.readString()) })
+        RecastInternal.OVERLAY_RESET -> readOverlayReset(reader)
 
         else -> null
     }
@@ -155,6 +153,8 @@ object ServerboundCodec {
             is OverlayReset -> {
                 writer.writeVarInt(packet.flags).writeVarInt(packet.chat.size)
                 for (line in packet.chat) writer.writeVarLong(line.ageNanos).writeString(line.json)
+                if (packet.resetsTitle) writer.writeLong(packet.titleAgeNanos)
+                if (packet.resetsActionBar) writer.writeLong(packet.actionBarAgeNanos)
             }
 
             is CameraFrame -> {
@@ -205,4 +205,12 @@ private fun readCompactCameraFrame(reader: PacketReader): CameraFrame {
         else -> FloatArray(16) { reader.readFloat() }
     }
     return CameraFrame(modelView, fov, position, hand)
+}
+
+private fun readOverlayReset(reader: PacketReader): OverlayReset {
+    val flags = reader.readVarInt()
+    val chat = List(reader.readVarInt()) { OverlayChatLine(reader.readVarLong(), reader.readString()) }
+    val titleAge = if (flags and OverlayReset.TITLE != 0) reader.readLong() else OverlayReset.NONE
+    val actionBarAge = if (flags and OverlayReset.ACTION_BAR != 0) reader.readLong() else OverlayReset.NONE
+    return OverlayReset(flags, chat, titleAge, actionBarAge)
 }

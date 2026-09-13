@@ -26,7 +26,7 @@ object StateDiff {
         diffMaps(from, to, out)
         diffWindow(from, to, out)
         val result = ArrayList<PlayPacket>(out.size + 2)
-        diffOverlays(from, to, fromNanos, nanos, result)
+        diffOverlays(to, nanos, result)
         result += out
         val target = to.localPlayer
         if (target.hasPosition) result += LocalPose(target.x, target.y, target.z, target.yaw, target.pitch)
@@ -491,46 +491,6 @@ object StateDiff {
     private const val EMPTY_TEXT = "{\"text\":\"\"}"
 }
 
-private fun diffOverlays(
-    from: ShadowClient,
-    to: ShadowClient,
-    fromNanos: Long,
-    toNanos: Long,
-    out: MutableList<PlayPacket>
-) {
-    val visibleFrom = from.overlays.visibleChat(fromNanos)
-    val visibleTo = to.overlays.visibleChat(toNanos)
-    if (!sameLines(visibleFrom, visibleTo)) {
-        out += OverlayReset(OverlayReset.CHAT, visibleTo.map { OverlayChatLine(toNanos - it.nanos, it.json) })
-    }
-    val barFrom =
-        from.overlays.actionBar?.takeIf { fromNanos - it.nanos <= ShadowOverlays.ACTION_BAR_NANOS && it.nanos <= fromNanos }
-    val barTo =
-        to.overlays.actionBar?.takeIf { toNanos - it.nanos <= ShadowOverlays.ACTION_BAR_NANOS && it.nanos <= toNanos }
-    if (barTo != null && (barFrom == null || barFrom.nanos != barTo.nanos || barFrom.json != barTo.json)) {
-        out += ChatMessage(barTo.json, ShadowOverlays.ACTION_BAR)
-    } else if (barTo == null && barFrom != null) {
-        out += ChatMessage(EMPTY_TEXT, ShadowOverlays.ACTION_BAR)
-    }
-    val titleFrom = from.overlays.title
-    val titleTo = to.overlays.title
-    val activeFrom = titleFrom.activeAt(fromNanos)
-    val activeTo = titleTo.activeAt(toNanos)
-    if (activeTo && (!activeFrom || titleFrom.shownAtNanos != titleTo.shownAtNanos || titleFrom.titleJson != titleTo.titleJson || titleFrom.subtitleJson != titleTo.subtitleJson)) {
-        out += Title(Title.SET_TIMES, null, titleTo.fadeIn, titleTo.stay, titleTo.fadeOut)
-        out += Title(Title.SET_SUBTITLE, titleTo.subtitleJson ?: EMPTY_TEXT, 0, 0, 0)
-        out += Title(Title.SET_TITLE, titleTo.titleJson, 0, 0, 0)
-    } else if (!activeTo && activeFrom) {
-        out += Title(Title.RESET, null, 0, 0, 0)
-    }
+private fun diffOverlays(to: ShadowClient, toNanos: Long, out: MutableList<PlayPacket>) {
+    out += to.overlays.snapshot(toNanos)
 }
-
-private fun sameLines(a: List<ChatLine>, b: List<ChatLine>): Boolean {
-    if (a.size != b.size) return false
-    for (index in a.indices) {
-        if (a[index].nanos != b[index].nanos || a[index].json != b[index].json) return false
-    }
-    return true
-}
-
-private const val EMPTY_TEXT = "{\"text\":\"\"}"

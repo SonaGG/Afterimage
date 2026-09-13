@@ -105,7 +105,9 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
         val channel = channel ?: return
         if (packet.packetId == RecastInternal.OVERLAY_RESET) {
             val reset = PacketCodec.decode(packet) as? OverlayReset ?: return
-            if (reset.flags and OverlayReset.CHAT != 0) resetChat(reset)
+            if (reset.resetsChat) resetChat(reset)
+            if (reset.resetsTitle) resetTitle(reset.titleAgeNanos)
+            if (reset.resetsActionBar) resetActionBar(reset.actionBarAgeNanos)
             return
         }
         var payload = packet.payload
@@ -220,6 +222,23 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
         }
     }
 
+    private fun resetTitle(ageNanos: Long) {
+        val gui = minecraft.gui as GameGuiAccessor
+        if (ageNanos < 0) {
+            gui.`recast$setTitleTime`(0)
+            return
+        }
+        val total = gui.`recast$titleFadeInTime`() + gui.`recast$titleDuration`() + gui.`recast$titleFadeOutTime`()
+        val remaining = total - (ageNanos / Nanos.PER_TICK).toInt()
+        gui.`recast$setTitleTime`(remaining.coerceAtLeast(0))
+    }
+
+    private fun resetActionBar(ageNanos: Long) {
+        val gui = minecraft.gui as GameGuiAccessor
+        val remaining = if (ageNanos < 0) 0 else ACTION_BAR_TICKS - (ageNanos / Nanos.PER_TICK).toInt()
+        gui.`recast$setOverlayMessageCooldown`(remaining.coerceAtLeast(0))
+    }
+
     override fun onSettled(positionNanos: Long, mode: DeliveryMode) {
         if (mode == DeliveryMode.SEEK) snapEntities()
     }
@@ -293,6 +312,7 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
 
     companion object {
         private const val LOG_FAILURES = 8L
+        private const val ACTION_BAR_TICKS = 60
         private const val DROP_OUTBOUND = "recast_drop_outbound"
         private const val DECODER = "decoder"
         private const val ENCODER = "encoder"

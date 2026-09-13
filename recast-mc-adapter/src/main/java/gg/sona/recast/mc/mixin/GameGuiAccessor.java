@@ -10,7 +10,22 @@ public interface GameGuiAccessor {
     int recast$ticks();
 
     @Accessor("titleTime")
+    int recast$titleTime();
+
+    @Accessor("titleTime")
     void recast$setTitleTime(int value);
+
+    @Accessor("titleFadeInTime")
+    int recast$titleFadeInTime();
+
+    @Accessor("titleDuration")
+    int recast$titleDuration();
+
+    @Accessor("titleFadeOutTime")
+    int recast$titleFadeOutTime();
+
+    @Accessor("overlayMessageCooldown")
+    int recast$overlayMessageCooldown();
 
     @Accessor("overlayMessageCooldown")
     void recast$setOverlayMessageCooldown(int value);
