@@ -10,8 +10,7 @@ Except as expressly permitted in a written agreement with Sona Interactive, Inc.
 * Copy or reproduce the software
 * Modify or create derivative works
 * Redistribute, publish, sublicense, or sell the software
-* Use the software for commercial purposes
-* Remove or alter copyright, trademark, or proprietary notices
+s* Remove or alter copyright, trademark, or proprietary notices
 
 Access to the software does not grant any ownership rights or intellectual property rights beyond those expressly
 provided.
