@@ -19,6 +19,9 @@ public interface BookEditScreenAccessor {
     @Accessor("signing")
     boolean recast$signing();
 
+    @Accessor("unsigned")
+    boolean recast$unsigned();
+
     @Accessor("title")
     String recast$title();
 

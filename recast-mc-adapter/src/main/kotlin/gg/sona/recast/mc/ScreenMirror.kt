@@ -29,6 +29,7 @@ import net.minecraft.inventory.menu.EmptyMenuProvider
 import net.minecraft.inventory.menu.TraderMenu
 import net.minecraft.item.CreativeModeTab
 import net.minecraft.item.ItemStack
+import net.minecraft.item.Items
 import net.minecraft.nbt.NbtList
 import net.minecraft.nbt.NbtString
 import net.minecraft.network.PacketByteBuf
@@ -218,8 +219,7 @@ class ScreenMirror(
 
     private fun bookScreen(state: LocalScreen, player: PlayerEntity): Screen? {
         val held = player.getItemInHand() ?: return null
-        val book = held.copy()
-        return BookEditScreen(player, book, true)
+        return BookEditScreen(player, held.copy(), held.item === Items.WRITABLE_BOOK)
     }
 
     private fun containerScreen(window: ShadowWindow, player: PlayerEntity): Screen? {
@@ -333,13 +333,17 @@ class ScreenMirror(
 
     private fun syncBook(target: BookEditScreen, state: LocalScreen) {
         val accessor = target as BookEditScreenAccessor
+        val pages = accessor.`recast$pages`() ?: NbtList()
+        if (!accessor.`recast$unsigned`()) {
+            accessor.`recast$setCurrentPage`(state.detail.coerceIn(0, maxOf(0, pages.size() - 1)))
+            return
+        }
         val signing = state.cursor == 1
         accessor.`recast$setSigning`(signing)
         if (signing) {
             accessor.`recast$setTitle`(state.text)
             return
         }
-        val pages = accessor.`recast$pages`() ?: NbtList()
         while (pages.size() <= state.detail) pages.addElement(NbtString(""))
         pages.setElement(state.detail, NbtString(state.text))
         accessor.`recast$setPageCount`(maxOf(1, pages.size()))
