@@ -17,6 +17,12 @@ import kotlin.math.pow
 
 class PostProcessor(private val lutsDirectory: () -> Path) {
 
+    enum class Stage(val depthOfField: Boolean, val grade: Boolean) {
+        DEPTH_OF_FIELD(true, false),
+        GRADE(false, true),
+        FULL(true, true),
+    }
+
     class Frame(
         val look: LookSettings,
         val focusDistance: Double,
@@ -25,6 +31,7 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
         val orthographic: Boolean,
         val seed: Float,
         val maxTaps: Int,
+        val tapOffset: Float = 0f,
     )
 
     private class Program(val id: Int, val uniforms: Map<String, Int>) {
@@ -59,13 +66,16 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
         }
     }
 
-    fun drawLook(colorTexture: Int, depthTexture: Int, width: Int, height: Int, frame: Frame): Boolean {
+    fun draw(stage: Stage, colorTexture: Int, depthTexture: Int, width: Int, height: Int, frame: Frame): Boolean {
+        val settings = frame.look
+        val grade = stage.grade && (settings.grades || settings.overlays)
+        val wanted = if (stage.depthOfField && settings.depthOfField && depthTexture != 0) (settings.aperture.coerceIn(0.0, 1.0) * MAX_COC_FRACTION * height).toFloat() else 0f
+        val depthOfField = wanted >= 0.5f
+        val maxCoc = if (depthOfField) wanted else 0f
+        if (!grade && !depthOfField) return false
         if (!ensure()) return false
         val program = look ?: return false
-        val settings = frame.look
-        val lutTexture = if (settings.lut.isNotEmpty()) resolveLut(settings.lut) else null
-        val depthOfField = settings.depthOfField && depthTexture != 0
-        val maxCoc = if (depthOfField) (settings.aperture.coerceIn(0.0, 1.0) * MAX_COC_FRACTION * height).toFloat() else 0f
+        val lutTexture = if (grade && settings.lut.isNotEmpty()) resolveLut(settings.lut) else null
         val taps = frame.maxTaps.coerceIn(8, MAX_TAPS)
         val radiusScale = max(MIN_RADIUS_SCALE, (maxCoc * maxCoc) / (2f * taps))
         val bias = if (radiusScale > 1f) (ln(radiusScale.toDouble()) / ln(2.0)).toFloat() else 0f
@@ -102,15 +112,16 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             GL20.glUniform1f(program["radiusScale"], radiusScale)
             GL20.glUniform1f(program["lodBias"], bias)
             GL20.glUniform1i(program["maxTaps"], taps)
-            GL20.glUniform1f(program["exposure"], 2.0.pow(settings.exposure).toFloat())
-            GL20.glUniform1f(program["contrast"], settings.contrast.toFloat())
-            GL20.glUniform1f(program["saturation"], settings.saturation.toFloat())
+            GL20.glUniform1f(program["tapOffset"], frame.tapOffset)
+            GL20.glUniform1f(program["exposure"], if (grade) 2.0.pow(settings.exposure).toFloat() else 1f)
+            GL20.glUniform1f(program["contrast"], if (grade) settings.contrast.toFloat() else 1f)
+            GL20.glUniform1f(program["saturation"], if (grade) settings.saturation.toFloat() else 1f)
             GL20.glUniform1f(program["lutStrength"], if (lutTexture != null) settings.lutStrength.toFloat() else 0f)
             GL20.glUniform1f(program["lutSize"], (lutTexture?.size ?: 2).toFloat())
-            GL20.glUniform1f(program["vignette"], settings.vignette.toFloat())
+            GL20.glUniform1f(program["vignette"], if (grade) settings.vignette.toFloat() else 0f)
             GL20.glUniform1f(program["vignetteSoftness"], settings.vignetteSoftness.toFloat())
-            GL20.glUniform1f(program["letterbox"], letterboxBar(settings.letterbox, width, height))
-            GL20.glUniform1f(program["grain"], settings.grain.toFloat())
+            GL20.glUniform1f(program["letterbox"], if (grade) letterboxBar(settings.letterbox, width, height) else 0f)
+            GL20.glUniform1f(program["grain"], if (grade) settings.grain.toFloat() else 0f)
             GL20.glUniform1f(program["grainSize"], max(1.0, settings.grainSize).toFloat())
             GL20.glUniform1f(program["seed"], frame.seed)
             quad()
@@ -294,7 +305,7 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
 
         private val LOOK_UNIFORMS = listOf(
             "color", "depth", "lut", "texel", "aspect", "near", "far", "ortho", "focus", "focusRange", "maxCoc",
-            "radiusScale", "lodBias", "maxTaps", "exposure", "contrast", "saturation", "lutStrength", "lutSize",
+            "radiusScale", "lodBias", "maxTaps", "tapOffset", "exposure", "contrast", "saturation", "lutStrength", "lutSize",
             "vignette", "vignetteSoftness", "letterbox", "grain", "grainSize", "seed",
         )
 
@@ -325,6 +336,7 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             "uniform float radiusScale;",
             "uniform float lodBias;",
             "uniform int maxTaps;",
+            "uniform float tapOffset;",
             "uniform float exposure;",
             "uniform float contrast;",
             "uniform float saturation;",
@@ -358,7 +370,7 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             "    vec4 acc = center;",
             "    float total = 1.0;",
             "    float radius = radiusScale;",
-            "    float angle = 0.0;",
+            "    float angle = tapOffset;",
             "    for (int i = 0; i < TAP_LIMIT; i++) {",
             "        if (i >= maxTaps || radius >= maxCoc) break;",
             "        angle += GOLDEN_ANGLE;",

@@ -27,7 +27,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
         }
         val look = session.project.look
         if (Widgets.beginProperties("look-top")) {
-            Widgets.property("Preview in viewport", "Show the look on the scene while editing. Exports always render it when Apply look is on in the Export panel.")
+            Widgets.property("Preview in viewport", "Show the look on the world while editing; gizmos, the hand and the HUD stay untouched. Exports render it when Apply look is on in the Export panel.")
             Widgets.toggle("##preview", context.ui.lookPreview)?.let { context.ui.lookPreview = it }
             Widgets.endProperties()
         }
