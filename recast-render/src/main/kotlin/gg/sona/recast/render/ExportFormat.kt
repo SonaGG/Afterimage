@@ -11,20 +11,20 @@ enum class ExportFormat(
     val description: String,
 ) {
     MP4_H264(
-        "MP4 · H.264",
+        "MP4 (H.264)",
         "mp4",
         "libx264",
         description = "Plays everywhere. Best default for YouTube, Discord and editing."
     ),
     MP4_H265(
-        "MP4 · H.265",
+        "MP4 (H.265)",
         "mp4",
         "libx265",
         description = "About half the size of H.264 at the same quality; slower to encode, needs a modern player."
     ),
-    WEBM_VP9("WebM · VP9", "webm", "libvpx-vp9", description = "Open format, great for the web. Slow to encode."),
+    WEBM_VP9("WebM (VP9)", "webm", "libvpx-vp9", description = "Open format, great for the web. Slow to encode."),
     MOV_PRORES(
-        "MOV · ProRes",
+        "MOV (ProRes)",
         "mov",
         "prores_ks",
         supportsBitrate = false,

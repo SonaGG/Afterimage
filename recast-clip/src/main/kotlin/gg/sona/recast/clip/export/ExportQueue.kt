@@ -41,6 +41,7 @@ class ExportQueue(parallelism: Int = 1) : AutoCloseable {
                     listeners.dispatch { it.onProgress(handle) }
                 },
                 { text -> handle.detail = text },
+                { message -> handle.warn(message) },
             )
             handle.result = handle.job.run(report)
             if (handle.cancelRequested) {

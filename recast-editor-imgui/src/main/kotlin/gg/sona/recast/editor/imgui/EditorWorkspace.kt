@@ -30,6 +30,7 @@ class EditorWorkspace(val context: EditorContext) {
         CameraPanel(context),
         ExportPanel(context),
         VisualsPanel(context),
+        LookPanel(context),
         RenderFilterPanel(context),
         KeybindsPanel(context),
         SettingsPanel(context),
@@ -136,8 +137,10 @@ class EditorWorkspace(val context: EditorContext) {
                 if (panel.dockArea != DockArea.FLOATING) ImGui.setWindowFocus(title)
             }
         }
+        val visualsDock = (panels.firstOrNull { it is VisualsPanel } as? AbstractPanel)?.dockId ?: 0
         for (panel in panels) {
             if (panel is GraphEditorPanel && !context.ui.graphDocked) continue
+            if (panel is LookPanel && visualsDock != 0) ImGui.setNextWindowDockID(visualsDock, ImGuiCond.FirstUseEver)
             panel.draw(frame)
         }
         frameRect?.let { tools.draw(it, frame) }

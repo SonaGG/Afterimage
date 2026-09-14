@@ -29,6 +29,13 @@ data class VideoColor(val primaries: Int, val transfer: Int, val matrix: Int, va
         frame.color_range(avutil.AVCOL_RANGE_JPEG)
     }
 
+    fun tagGraySource(frame: AVFrame) {
+        frame.color_primaries(primaries)
+        frame.color_trc(transfer)
+        frame.colorspace(matrix)
+        frame.color_range(avutil.AVCOL_RANGE_JPEG)
+    }
+
     companion object {
         val BT709_LIMITED = VideoColor(
             avutil.AVCOL_PRI_BT709,

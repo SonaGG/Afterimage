@@ -2,6 +2,7 @@ package gg.sona.recast.clip.export
 
 import java.nio.file.Path
 import java.util.*
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicReference
 
@@ -23,6 +24,14 @@ class ExportHandle internal constructor(val id: UUID, val job: ExportJob) {
     @Volatile
     var detail: String = ""
         internal set
+
+    private val warningList = CopyOnWriteArrayList<String>()
+
+    val warnings: List<String> get() = warningList
+
+    internal fun warn(message: String) {
+        if (message.isNotBlank() && message !in warningList) warningList += message
+    }
 
     @Volatile
     var startedAtNanos: Long = 0L

@@ -8,12 +8,13 @@ data class Selection(
     val markerIds: Set<UUID> = emptySet(),
     val valueKeys: Set<ValueKey> = emptySet(),
     val viewTimes: Set<Long> = emptySet(),
+    val packTimes: Set<Long> = emptySet(),
     val timelapseIds: Set<UUID> = emptySet(),
     val momentIds: Set<UUID> = emptySet(),
 ) {
-    val isEmpty: Boolean get() = keyframeTimes.isEmpty() && clipIds.isEmpty() && markerIds.isEmpty() && valueKeys.isEmpty() && viewTimes.isEmpty() && timelapseIds.isEmpty() && momentIds.isEmpty()
+    val isEmpty: Boolean get() = keyframeTimes.isEmpty() && clipIds.isEmpty() && markerIds.isEmpty() && valueKeys.isEmpty() && viewTimes.isEmpty() && packTimes.isEmpty() && timelapseIds.isEmpty() && momentIds.isEmpty()
 
-    val single: Boolean get() = keyframeTimes.size + clipIds.size + markerIds.size + valueKeys.size + viewTimes.size + timelapseIds.size + momentIds.size == 1
+    val single: Boolean get() = keyframeTimes.size + clipIds.size + markerIds.size + valueKeys.size + viewTimes.size + packTimes.size + timelapseIds.size + momentIds.size == 1
 
     fun withValueKeyframe(lane: ValueLane, nanos: Long, additive: Boolean = false): Selection =
         if (additive) copy(
@@ -25,6 +26,9 @@ data class Selection(
 
     fun withViewKeyframe(nanos: Long, additive: Boolean = false): Selection =
         if (additive) copy(viewTimes = viewTimes + nanos) else Selection(viewTimes = setOf(nanos))
+
+    fun withPackKeyframe(nanos: Long, additive: Boolean = false): Selection =
+        if (additive) copy(packTimes = packTimes + nanos) else Selection(packTimes = setOf(nanos))
 
     fun withMarker(id: UUID, additive: Boolean = false): Selection =
         if (additive) copy(markerIds = markerIds + id) else Selection(markerIds = setOf(id))

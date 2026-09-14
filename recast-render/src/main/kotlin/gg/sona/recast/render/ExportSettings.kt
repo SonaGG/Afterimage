@@ -1,6 +1,7 @@
 package gg.sona.recast.render
 
 import gg.sona.recast.core.time.Nanos
+import gg.sona.recast.editor.look.LookSettings
 import java.nio.file.Path
 
 data class ExportSettings(
@@ -38,12 +39,28 @@ data class ExportSettings(
     val waitForChunks: Boolean = true,
     val gameAudio: Boolean = true,
     val gameAudioVolume: Double = 1.0,
+    val look: LookSettings? = null,
+    val alpha: Boolean = false,
+    val depthRange: Double = 0.0,
 ) {
+    val lookActive: Boolean get() = look?.active == true && projection != ExportProjection.EQUIRECTANGULAR
+
+    val depthOfField: Boolean get() = lookActive && look?.depthOfField == true
+
+    val transparent: Boolean get() = alpha && ExportEncoding.supportsAlpha(format, proresProfile)
+
     val frameIntervalNanos: Long get() = Nanos.PER_SECOND / fps
 
     val outputDurationNanos: Long get() = timeMapping?.outputDurationNanos ?: maxOf(0L, endNanos - startNanos)
 
     val frameCount: Long get() = outputDurationNanos / frameIntervalNanos + 1
+
+    val supersampleFactor: Int
+        get() = when {
+            supersample >= 4 -> 4
+            supersample >= 2 -> 2
+            else -> 1
+        }
 
     fun replayNanosAt(outputNanos: Long): Long = timeMapping?.replayNanosAt(outputNanos) ?: (startNanos + outputNanos)
 }

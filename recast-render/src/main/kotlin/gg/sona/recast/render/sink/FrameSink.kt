@@ -7,4 +7,6 @@ interface FrameSink : AutoCloseable {
     fun begin(settings: ExportSettings)
 
     fun accept(frame: RenderedFrame)
+
+    fun abort() = close()
 }

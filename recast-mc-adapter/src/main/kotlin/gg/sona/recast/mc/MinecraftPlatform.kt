@@ -13,6 +13,7 @@ class MinecraftPlatform(val minecraft: Minecraft) {
     val bakesDirectory: Path = root.resolve("bakes")
     val exportsDirectory: Path = root.resolve("exports")
     val projectsDirectory: Path = root.resolve("projects")
+    val lutsDirectory: Path = root.resolve("luts")
 
     fun identity(): RecorderIdentity {
         val profile = minecraft.session?.profile

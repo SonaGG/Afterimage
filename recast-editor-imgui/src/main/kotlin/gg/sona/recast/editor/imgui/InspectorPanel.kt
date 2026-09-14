@@ -39,6 +39,7 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             selection.keyframeTimes.size > 1 -> keyframes(session, selection.keyframeTimes)
             selection.valueKeys.isNotEmpty() -> valueKeyframe(session, selection.valueKeys.first())
             selection.viewTimes.isNotEmpty() -> viewKeyframe(session, selection.viewTimes.first())
+            selection.packTimes.isNotEmpty() -> packKeyframe(session, selection.packTimes.first())
             selection.clipIds.isNotEmpty() -> clip(session, selection.clipIds.first())
             selection.markerIds.isNotEmpty() -> marker(session, selection.markerIds.first())
             else -> when (val target = context.inspect) {
@@ -373,6 +374,44 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         ) { session.execute(SetValueKeyframeEasing(setOf(key), it)) }
         if (Widgets.dangerButton("Delete")) {
             session.execute(RemoveValueKeyframes(setOf(key)))
+            session.selection = Selection.NONE
+        }
+    }
+
+    private fun packKeyframe(session: EditorSession, time: Long) {
+        val frame = session.project.packs.at(time)
+        if (frame == null) {
+            session.selection = Selection.NONE
+            return
+        }
+        val state = frame.value
+        title(Icon.PACKAGE, "Texture pack switch", TimeFormat.clock(time))
+        if (Widgets.beginProperties("pack")) {
+            Widgets.property("Time")
+            Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
+                TimeFormat.parseClock(text)?.let { target ->
+                    if (target != time) {
+                        session.execute(MovePackKeyframe(time, target))
+                        session.selection = Selection(packTimes = setOf(target))
+                    }
+                }
+            }
+            Widgets.property("Default textures", "No resource packs from here on")
+            Widgets.toggle("##default", state.isDefault)?.let { if (it) session.execute(SetPackKeyframe(time, PackState.DEFAULT)) }
+            val available = context.host.resourcePacks()
+            for (pack in available) {
+                Widgets.property(pack.removeSuffix(".zip"))
+                Widgets.toggle("##pack-$pack", pack in state.packs)?.let { session.execute(SetPackKeyframe(time, state.toggled(pack))) }
+            }
+            if (available.isEmpty()) {
+                Widgets.property("Packs")
+                Widgets.mutedText("None in the resourcepacks folder")
+            }
+            Widgets.endProperties()
+        }
+        Widgets.wrappedText("Packs lower in the list override the ones above, like the resource pack screen. Switching reloads textures, which takes a moment.", EditorTheme.TEXT_DIM.u32)
+        if (Widgets.dangerButton("Delete keyframe")) {
+            session.execute(RemovePackKeyframes(setOf(time)))
             session.selection = Selection.NONE
         }
     }
@@ -747,12 +786,14 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         val label = valueLane?.label ?: when (kind) {
             LaneKind.CAMERA -> "Camera path"
             LaneKind.POSE -> "Poses"
+            LaneKind.TEXTURE_PACK -> "Texture packs"
             else -> "View"
         }
         val count = when {
             kind == LaneKind.CAMERA -> session.project.camera.keyframeTimes().size
             kind == LaneKind.POSE -> session.project.poses.values.sumOf { it.keyframes.size }
             kind == LaneKind.VIEW -> session.project.views.keyframes.size
+            kind == LaneKind.TEXTURE_PACK -> session.project.packs.keyframes.size
             valueLane != null -> session.project.valueTrack(valueLane).keyframes.size
             else -> 0
         }
@@ -985,6 +1026,7 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             ValueLane.TIME_OF_DAY to listOf(0.0, 6000.0, 12000.0, 18000.0),
             ValueLane.SHAKE to listOf(0.0, 0.5, 1.0, 2.0),
             ValueLane.FREEZE to listOf(0.5, 1.0, 2.0, 5.0),
+            ValueLane.FOCUS to listOf(2.0, 4.0, 8.0, 16.0, 32.0),
         )
         val LANE_HINTS = mapOf(
             ValueLane.SPEED to "Speed keyframes ramp playback speed between them.",
@@ -992,6 +1034,7 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             ValueLane.TIME_OF_DAY to "Time of day keyframes drive the sun and lighting.",
             ValueLane.SHAKE to "Shake keyframes ramp handheld camera shake in and out.",
             ValueLane.FREEZE to "Freeze keyframes hold the replay still while the camera keeps moving.",
+            ValueLane.FOCUS to "Focus keyframes rack the depth of field focus distance over time.",
         )
         val DISPLAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm")
     }

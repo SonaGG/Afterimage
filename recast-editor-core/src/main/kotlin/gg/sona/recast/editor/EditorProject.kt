@@ -6,6 +6,7 @@ import gg.sona.recast.camera.track.interpolator.CyclicInterpolator
 import gg.sona.recast.camera.track.interpolator.DoubleInterpolator
 import gg.sona.recast.camera.track.interpolator.FovInterpolator
 import gg.sona.recast.clip.Clip
+import gg.sona.recast.editor.look.LookSettings
 import gg.sona.recast.editor.pose.BodyPose
 import gg.sona.recast.editor.pose.PoseInterpolator
 import java.nio.file.Path
@@ -46,7 +47,10 @@ class EditorProject(
     val shake = Track(DoubleInterpolator, "shake")
     val shakeFrequency = Track(DoubleInterpolator, "shakeFrequency")
     val freeze = Track(DoubleInterpolator, "freeze")
+    val focus = Track(DoubleInterpolator, "focus")
     val views = Track(ViewStateInterpolator, "views")
+    val packs = Track(PackStateInterpolator, "packs")
+    val look = LookSettings()
 
     val poses = LinkedHashMap<Int, Track<BodyPose>>()
     val clips = ArrayList<Clip>()
@@ -72,6 +76,8 @@ class EditorProject(
         LaneState(LaneKind.WORLD, "World"),
         LaneState(LaneKind.MOMENTS, "Moments"),
         LaneState(LaneKind.POSE, "Poses"),
+        LaneState(LaneKind.FOCUS, "Focus"),
+        LaneState(LaneKind.TEXTURE_PACK, "Texture pack"),
     )
     var inPointNanos: Long = 0L
     var outPointNanos: Long = 0L
@@ -100,6 +106,7 @@ class EditorProject(
         ValueLane.SHAKE -> shake
         ValueLane.FREEZE -> freeze
         ValueLane.SHAKE_FREQUENCY -> shakeFrequency
+        ValueLane.FOCUS -> focus
     }
 
     fun laneEnabled(kind: LaneKind): Boolean = !lane(kind).muted
@@ -119,6 +126,11 @@ class EditorProject(
     fun viewAt(timeNanos: Long): ViewState? {
         if (!laneEnabled(LaneKind.VIEW) || views.isEmpty || timeNanos < views.firstNanos) return null
         return views.valueAt(timeNanos)
+    }
+
+    fun packAt(timeNanos: Long): PackState? {
+        if (!laneEnabled(LaneKind.TEXTURE_PACK) || packs.isEmpty || timeNanos < packs.firstNanos) return null
+        return packs.valueAt(timeNanos)
     }
 
     fun poseTrack(entityId: Int): Track<BodyPose> =

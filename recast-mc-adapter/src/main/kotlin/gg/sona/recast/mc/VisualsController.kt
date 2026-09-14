@@ -16,6 +16,7 @@ class VisualsController(private val minecraft: Minecraft, val settings: VisualSe
 
     var active: () -> Boolean = { false }
     var exporting: () -> Boolean = { false }
+    var alphaExport: () -> Boolean = { false }
     var timeOfDayProvider: () -> Double? = { null }
 
     var mobTypeProvider: (Int) -> Int? = { null }
@@ -130,7 +131,7 @@ class VisualsController(private val minecraft: Minecraft, val settings: VisualSe
 
     fun hideParticleType(type: Int): Boolean = active() && settings.isParticleTypeHidden(type)
 
-    fun hideSky(): Boolean = active() && !settings.renderSky
+    fun hideSky(): Boolean = active() && (!settings.renderSky || alphaExport())
 
     fun hideClouds(): Boolean = active() && !settings.renderClouds
 
@@ -146,7 +147,7 @@ class VisualsController(private val minecraft: Minecraft, val settings: VisualSe
 
     fun hideScoreboard(): Boolean = active() && !settings.showScoreboard
 
-    fun hideVignette(): Boolean = active() && !settings.showVignette
+    fun hideVignette(): Boolean = active() && (!settings.showVignette || alphaExport())
 
     fun hideChat(): Boolean = active() && !settings.showChat
 
@@ -169,7 +170,7 @@ class VisualsController(private val minecraft: Minecraft, val settings: VisualSe
             fogBuffer.put(r).put(g).put(b).put(1f)
             fogBuffer.flip()
             GL11.glFogfv(GL11.GL_FOG_COLOR, fogBuffer)
-            GlStateManager.clearColor(r, g, b, 1f)
+            GlStateManager.clearColor(r, g, b, clearAlpha())
         }
         if (settings.overrideSkyColor && !settings.renderSky) {
             val rgb = settings.skyColor
@@ -177,10 +178,12 @@ class VisualsController(private val minecraft: Minecraft, val settings: VisualSe
                 ((rgb shr 16) and 0xFF) / 255f,
                 ((rgb shr 8) and 0xFF) / 255f,
                 (rgb and 0xFF) / 255f,
-                1f
+                clearAlpha()
             )
         }
     }
+
+    private fun clearAlpha(): Float = if (alphaExport()) 0f else 1f
 
     fun shutdown() = restoreGamma()
 

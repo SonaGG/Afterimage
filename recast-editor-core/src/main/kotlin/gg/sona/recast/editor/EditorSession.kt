@@ -77,6 +77,16 @@ class EditorSession(val project: EditorProject, val replay: ReplaySession? = nul
 
     fun speedAt(nanos: Long): Double? = project.speedAt(nanos)
 
+    fun focusDistanceAt(nanos: Long, cameraPosition: Vector3d): Double {
+        val look = project.look
+        val target = look.focusTargetId
+        if (target != null) {
+            val position = aimPosition(target, nanos)
+            if (position != null) return maxOf(ValueLane.FOCUS.min, position.distance(cameraPosition))
+        }
+        return valueAt(ValueLane.FOCUS, nanos) ?: look.focusDistance
+    }
+
     fun valueAt(lane: ValueLane, nanos: Long): Double? = project.valueAt(lane, nanos)
 
     fun deleteSelection() {
@@ -84,6 +94,7 @@ class EditorSession(val project: EditorProject, val replay: ReplaySession? = nul
         if (current.keyframeTimes.isNotEmpty()) execute(RemoveKeyframes(current.keyframeTimes))
         if (current.valueKeys.isNotEmpty()) execute(RemoveValueKeyframes(current.valueKeys))
         if (current.viewTimes.isNotEmpty()) execute(RemoveViewKeyframes(current.viewTimes))
+        if (current.packTimes.isNotEmpty()) execute(RemovePackKeyframes(current.packTimes))
         current.clipIds.forEach { execute(RemoveClip(it)) }
         current.markerIds.forEach { execute(RemoveMarker(it)) }
         current.timelapseIds.forEach { execute(RemoveTimelapse(it)) }

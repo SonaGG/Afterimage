@@ -61,7 +61,10 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
     val workspace = WorkspaceHost(minecraft, platform.root.resolve("recast-workspace.ini"))
     val keybinds = RecastKeybinds(minecraft)
     val ffmpeg = FfmpegRuntime(platform.root)
-    val exporter = FramebufferExporter(minecraft, exports, { replayer.session }, cameraDriver, workspace, ffmpeg)
+    val post = PostProcessor { platform.lutsDirectory }
+    val exporter = FramebufferExporter(minecraft, exports, { replayer.session }, cameraDriver, workspace, ffmpeg, post)
+    val lookPreview = LookPreview(minecraft, post)
+    val packDriver = PackDriver(minecraft)
     val gizmoRenderer = GizmoRenderer(minecraft)
     override val gizmos = GizmoBatch()
     val recordingHud = RecordingHud(minecraft)
@@ -90,6 +93,11 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
     override val projectsDirectory: Path get() = platform.projectsDirectory
     override val bakesDirectory: Path get() = platform.bakesDirectory
     override val exportsDirectory: Path get() = platform.exportsDirectory
+    override val lutsDirectory: Path get() = platform.lutsDirectory
+
+    override fun resourcePacks(): List<String> = packDriver.available()
+
+    override fun activeResourcePacks(): List<String> = packDriver.active()
 
     override val recording: RecordingControl = object : RecordingControl {
         override fun status(): RecordingStatus {
@@ -267,6 +275,10 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
             platform.runOnGameThread { message("Flashback: ${clip.title}") }
         }
         replayer.onOpened = ::onReplayOpened
+        exporter.focusDistance = { nanos, pose -> context.session?.focusDistanceAt(nanos, pose.position) ?: 8.0 }
+        lookPreview.viewport = { workspace.currentWorldViewport() ?: intArrayOf(0, 0, minecraft.width, minecraft.height) }
+        lookPreview.request = { lookPreviewRequest() }
+        visualsController.alphaExport = { exporter.transparentExport }
         replayer.onWorldTick = { boundary -> worldTick(boundary) }
         replayer.onWorldReady = { reopen ->
             chunkWorkers.ensure()
@@ -477,12 +489,34 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
 
     fun onFrameStart(tickDelta: Float) {
         exporter.onFrameStart()
+        applyPackTrack()
         exporter.beginRender()
         recorder.onFrame(tickDelta)
         applySpeedTrack()
         visualsController.onFrame()
         taskbarManager.onFrame(exporter.live())
         replayer.onFrame(tickDelta, workspace.isOpen, workspace.viewportHovered, !workspace.textInputActive)
+    }
+
+    private fun applyPackTrack() {
+        val session = context.session ?: return
+        val replay = session.replay ?: return
+        packDriver.apply(session.project.packAt(replay.positionNanos))
+    }
+
+    private fun lookPreviewRequest(): LookPreview.Request? {
+        if (exporter.isExporting || !context.ui.lookPreview || minecraft.world == null) return null
+        val session = context.session ?: return null
+        val replay = session.replay ?: return null
+        val look = session.project.look
+        if (!look.active) return null
+        val pose = cameraDriver.currentPose()
+        return LookPreview.Request(
+            look,
+            session.focusDistanceAt(replay.positionNanos, pose.position),
+            false,
+            (replay.positionNanos / PREVIEW_GRAIN_NANOS % 4096L).toFloat(),
+        )
     }
 
     private var lastAppliedView: ViewState? = null
@@ -816,6 +850,8 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
 
     private fun onReplayClosed() {
         screenMirror.close()
+        packDriver.restore()
+        lookPreview.release()
         context.session?.events?.cancel()
         preview.release()
         if (returnToLibrary) {
@@ -861,6 +897,7 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
         const val PACKET_SALT = 0x33L
         const val ENTITY_SALT = 0x44L
         const val THUMBNAIL_DELAY_FRAMES = 90
+        const val PREVIEW_GRAIN_NANOS = 16_666_667L
         const val VERSION = "1.0.0"
     }
 }

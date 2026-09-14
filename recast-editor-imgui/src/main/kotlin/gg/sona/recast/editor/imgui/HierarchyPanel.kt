@@ -182,6 +182,7 @@ class HierarchyPanel(private val context: EditorContext) :
             session.project.valueTrack(lane).keyframes.size
         )
         lanes += Triple(LaneKind.VIEW, "View", session.project.views.keyframes.size)
+        lanes += Triple(LaneKind.TEXTURE_PACK, "Texture pack", session.project.packs.keyframes.size)
         lanes += Triple(LaneKind.POSE, "Poses", session.project.poses.values.sumOf { it.keyframes.size })
         val visible = lanes.filter { (kind, label, count) -> count > 0 || kind in context.timeline.shownLanes }
             .filter { query.isEmpty() || it.second.lowercase().contains(query) }
@@ -683,6 +684,8 @@ class HierarchyPanel(private val context: EditorContext) :
             LaneKind.VIEW to Icon.EYE,
             LaneKind.FREEZE to Icon.SNOWFLAKE,
             LaneKind.POSE to Icon.PERSON,
+            LaneKind.FOCUS to Icon.FOCUS,
+            LaneKind.TEXTURE_PACK to Icon.PACKAGE,
         )
         val MOB_NAMES = mapOf(
             48 to "mob",

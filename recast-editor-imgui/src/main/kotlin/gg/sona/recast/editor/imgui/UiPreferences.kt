@@ -61,6 +61,10 @@ class UiPreferences(private val host: EditorHost) {
         get() = read("editor.orientationGizmo", true)
         set(value) = write("editor.orientationGizmo", value)
 
+    var lookPreview: Boolean
+        get() = read("editor.lookPreview", true)
+        set(value) = write("editor.lookPreview", value)
+
     var libraryList: Boolean
         get() = read("library.list", false)
         set(value) = write("library.list", value)

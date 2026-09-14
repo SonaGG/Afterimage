@@ -139,7 +139,10 @@ object RecastHooks {
         current.thumbnails.onWorldRendered()
         if (current.exporter.isExporting) return current.minecraft.options.hideGui
         if (!current.workspace.isOpen) return false
-        if (current.minecraft.options.hideGui) return true
+        if (current.minecraft.options.hideGui) {
+            guarded("look preview") { it.lookPreview.onHudRendered() }
+            return true
+        }
         current.workspace.applyWorldViewport()
         return false
     }
@@ -147,6 +150,7 @@ object RecastHooks {
     @JvmStatic
     fun onHudRendered(tickDelta: Float) = guarded("hud overlays") {
         it.screenMirror.render(tickDelta)
+        it.lookPreview.onHudRendered()
         it.recordingHud.render(it.recorder, it.settings.recordingIndicator, it.workspace.isOpen)
     }
 
@@ -313,7 +317,10 @@ object RecastHooks {
     fun displayTickRandom(): Random = runtime?.displayTickRandom() ?: Random()
 
     @JvmStatic
-    fun onWorldPassEnd() = guarded("depth capture") { it.exporter.captureDepth() }
+    fun onWorldPassEnd() = guarded("depth capture") {
+        it.exporter.captureDepth()
+        if (!it.exporter.isExporting && !it.preview.rendering) it.lookPreview.onWorldPassEnd()
+    }
 
     @JvmStatic
     fun chunkDeadline(finishNanos: Long): Long = runtime?.exporter?.chunkDeadline(finishNanos) ?: finishNanos

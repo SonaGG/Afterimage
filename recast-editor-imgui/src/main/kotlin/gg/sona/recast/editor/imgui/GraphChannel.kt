@@ -335,6 +335,7 @@ sealed class GraphChannel(
             ValueLane.SHAKE to EditorTheme.PINK,
             ValueLane.SHAKE_FREQUENCY to EditorTheme.PURPLE,
             ValueLane.FREEZE to EditorTheme.TEXT_MUTED,
+            ValueLane.FOCUS to EditorTheme.MINT,
         )
 
         val LANE_UNITS = mapOf(
@@ -344,6 +345,7 @@ sealed class GraphChannel(
             ValueLane.SHAKE to "",
             ValueLane.SHAKE_FREQUENCY to "Hz",
             ValueLane.FREEZE to "s",
+            ValueLane.FOCUS to "m",
         )
 
         val ALL: List<GraphChannel> = listOf(

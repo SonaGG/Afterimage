@@ -32,6 +32,11 @@ interface EditorHost {
     val projectsDirectory: Path
     val bakesDirectory: Path
     val exportsDirectory: Path
+    val lutsDirectory: Path
+
+    fun resourcePacks(): List<String>
+
+    fun activeResourcePacks(): List<String>
 
     fun message(text: String)
 

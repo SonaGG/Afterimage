@@ -6,4 +6,6 @@ enum class LaneKind(val label: String) {
     TIMELAPSE("Timelapse"),
     PLAYERS("Players"), WORLD("World"), MOMENTS("Moments"),
     POSE("Poses"),
+    FOCUS("Focus"),
+    TEXTURE_PACK("Texture pack"),
 }

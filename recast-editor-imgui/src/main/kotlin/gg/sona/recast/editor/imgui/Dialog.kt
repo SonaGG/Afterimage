@@ -11,6 +11,7 @@ class Dialog(val title: String, val icon: Icon, private val width: Float, privat
     var sections: List<Section> = emptyList()
     var section: Int = 0
     var subtitle: String = ""
+    var chips: List<String> = emptyList()
 
     private val id = "$title##dialog"
 
@@ -89,6 +90,10 @@ class Dialog(val title: String, val icon: Icon, private val width: Float, privat
             ImGui.sameLine(0f, EditorFonts.px(10f))
             ImGui.setCursorPosY(ImGui.getCursorPosY() + EditorFonts.px(3f))
             Widgets.smallText(subtitle, EditorTheme.TEXT_DIM.u32)
+        }
+        if (chips.isNotEmpty()) {
+            ImGui.sameLine(0f, EditorFonts.px(14f))
+            Widgets.chips(chips, lineHeight = EditorFonts.heading.fontSize)
         }
         val close = EditorFonts.px(26f)
         ImGui.setCursorPos(w - EditorFonts.px(14f) - close, EditorFonts.px(14f))

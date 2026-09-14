@@ -10,6 +10,7 @@ import gg.sona.recast.camera.track.Track
 import gg.sona.recast.clip.codec.CameraPathCodec
 import gg.sona.recast.clip.codec.ClipCodec
 import gg.sona.recast.clip.codec.EasingCodec
+import gg.sona.recast.editor.look.LookSettings
 import gg.sona.recast.editor.pose.BodyPart
 import gg.sona.recast.editor.pose.BodyPose
 import gg.sona.recast.editor.pose.PartPose
@@ -23,7 +24,7 @@ import java.nio.file.StandardCopyOption
 import java.util.*
 
 object ProjectCodec {
-    private const val VERSION = 14
+    private const val VERSION = 15
     private const val LEGACY_BLOCK_OVERRIDE_ORDINAL = 14
     private val MAGIC = byteArrayOf('R'.code.toByte(), 'C'.code.toByte(), 'P'.code.toByte(), 'J'.code.toByte())
 
@@ -103,6 +104,12 @@ object ProjectCodec {
                 for ((part, pose) in value.parts) writer.writeByte(part.ordinal).writeFloat(pose.x.toFloat())
                     .writeFloat(pose.y.toFloat()).writeFloat(pose.z.toFloat()).writeFloat(pose.weight.toFloat())
             }
+        }
+        writeLook(writer, project.look)
+        writer.writeVarInt(project.packs.keyframes.size)
+        for ((timeNanos, state) in project.packs.keyframes) {
+            writer.writeLong(timeNanos).writeVarInt(state.packs.size)
+            for (name in state.packs) writer.writeString(name)
         }
         return writer.toByteArray()
     }
@@ -287,6 +294,44 @@ object ProjectCodec {
                 }
             }
         }
+        if (version >= 15) {
+            readLook(reader, project.look)
+            repeat(reader.readVarInt()) {
+                val time = reader.readLong()
+                val names = ArrayList<String>()
+                repeat(reader.readVarInt()) { names += reader.readString() }
+                project.packs.set(Keyframe(time, PackState(names), Easing.LINEAR, SegmentMode.HOLD))
+            }
+        }
+    }
+
+    private fun writeLook(writer: PacketWriter, look: LookSettings) {
+        writer.writeBoolean(look.depthOfField)
+        writer.writeInt(look.focusTargetId ?: Int.MIN_VALUE)
+        writer.writeDouble(look.focusDistance).writeDouble(look.aperture).writeDouble(look.focusRange)
+        writer.writeDouble(look.exposure).writeDouble(look.contrast).writeDouble(look.saturation)
+        writer.writeString(look.lut).writeDouble(look.lutStrength)
+        writer.writeDouble(look.vignette).writeDouble(look.vignetteSoftness)
+        writer.writeDouble(look.letterbox)
+        writer.writeDouble(look.grain).writeDouble(look.grainSize)
+    }
+
+    private fun readLook(reader: PacketReader, look: LookSettings) {
+        look.depthOfField = reader.readBoolean()
+        look.focusTargetId = reader.readInt().takeIf { it != Int.MIN_VALUE }
+        look.focusDistance = reader.readDouble()
+        look.aperture = reader.readDouble()
+        look.focusRange = reader.readDouble()
+        look.exposure = reader.readDouble()
+        look.contrast = reader.readDouble()
+        look.saturation = reader.readDouble()
+        look.lut = reader.readString()
+        look.lutStrength = reader.readDouble()
+        look.vignette = reader.readDouble()
+        look.vignetteSoftness = reader.readDouble()
+        look.letterbox = reader.readDouble()
+        look.grain = reader.readDouble()
+        look.grainSize = reader.readDouble()
     }
 
     private fun writeValueTrack(writer: PacketWriter, track: Track<Double>) {

@@ -1,6 +1,7 @@
 package gg.sona.recast.render
 
 import gg.sona.recast.render.ffmpeg.VideoColor
+import java.nio.file.Path
 import java.util.*
 
 object ExportEncoding {
@@ -16,8 +17,45 @@ object ExportEncoding {
         }
     }
 
-    fun requestedPixelFormat(settings: ExportSettings): String =
-        if (settings.format == ExportFormat.MOV_PRORES) "yuv422p10le" else settings.pixelFormat
+    fun requestedPixelFormat(settings: ExportSettings): String = when {
+        settings.transparent && settings.format == ExportFormat.MOV_PRORES -> "yuva444p10le"
+        settings.transparent && settings.format == ExportFormat.WEBM_VP9 -> "yuva420p"
+        settings.format != ExportFormat.MOV_PRORES -> settings.pixelFormat
+        settings.proresProfile >= PRORES_4444 -> "yuv444p10le"
+        else -> "yuv422p10le"
+    }
+
+    fun supportsAlpha(format: ExportFormat, proresProfile: Int): Boolean = when (format) {
+        ExportFormat.PNG_SEQUENCE, ExportFormat.WEBM_VP9 -> true
+        ExportFormat.MOV_PRORES -> proresProfile >= PRORES_4444
+        else -> false
+    }
+
+    fun supportsDepth(format: ExportFormat): Boolean = format != ExportFormat.GIF && format != ExportFormat.JPEG_SEQUENCE
+
+    fun depthOutput(output: Path): Path {
+        val name = output.fileName.toString()
+        val dot = name.lastIndexOf('.')
+        val stem = if (dot > 0) name.substring(0, dot) else name
+        val extension = if (dot > 0) name.substring(dot) else ""
+        return output.resolveSibling("$stem-depth$extension")
+    }
+
+    fun depthPixelFormat(settings: ExportSettings, codec: String): String = when {
+        settings.format == ExportFormat.MOV_PRORES -> if (settings.proresProfile >= PRORES_4444) "yuv444p10le" else "yuv422p10le"
+        isHardware(codec) -> "yuv420p"
+        else -> "yuv420p10le"
+    }
+
+    fun depthVideoFilters(settings: ExportSettings, outputPixelFormat: String): String {
+        val color = videoColor(settings) ?: return "format=$outputPixelFormat"
+        return "scale=in_range=pc:out_range=${color.filterRange}:out_color_matrix=${color.filterMatrix},format=$outputPixelFormat"
+    }
+
+    fun isHardware(codec: String): Boolean =
+        codec.endsWith("_nvenc") || codec.endsWith("_amf") || codec.endsWith("_qsv") || codec.endsWith("_videotoolbox")
+
+    fun crf(settings: ExportSettings): Int = settings.crf.coerceIn(MIN_CRF, MAX_CRF)
 
     fun videoColor(settings: ExportSettings): VideoColor? =
         if (settings.format == ExportFormat.GIF) null else VideoColor.BT709_LIMITED
@@ -89,23 +127,24 @@ object ExportEncoding {
             if (!hardware) base["preset"] = settings.preset
             return base
         }
+        val crf = crf(settings).toString()
         return when {
             codec.endsWith("_nvenc") -> linkedMapOf(
                 "rc" to "vbr",
-                "cq" to settings.crf.toString(),
+                "cq" to crf,
                 "b" to "0",
                 "preset" to nvencPreset(settings.preset),
             )
 
             codec.endsWith("_amf") -> linkedMapOf(
                 "rc" to "cqp",
-                "qp_i" to settings.crf.toString(),
-                "qp_p" to settings.crf.toString(),
+                "qp_i" to crf,
+                "qp_p" to crf,
             )
 
-            codec.endsWith("_qsv") -> linkedMapOf("global_quality" to settings.crf.toString(), "preset" to settings.preset)
-            codec == "libvpx-vp9" -> linkedMapOf("crf" to settings.crf.toString(), "b" to "0")
-            else -> linkedMapOf("crf" to settings.crf.toString(), "preset" to settings.preset)
+            codec.endsWith("_qsv") -> linkedMapOf("global_quality" to crf, "preset" to settings.preset)
+            codec == "libvpx-vp9" -> linkedMapOf("crf" to crf, "b" to "0")
+            else -> linkedMapOf("crf" to crf, "preset" to settings.preset)
         }
     }
 
@@ -179,6 +218,10 @@ object ExportEncoding {
         return (totalKbps - (if (settings.format.supportsAudio && settings.audioFile != null) audioKbps else 0)).toInt()
             .coerceAtLeast(100)
     }
+
+    const val MIN_CRF = 1
+    const val MAX_CRF = 51
+    const val PRORES_4444 = 4
 
     private val HARDWARE_H264 = listOf("h264_nvenc", "h264_amf", "h264_qsv", "h264_videotoolbox")
     private val HARDWARE_H265 = listOf("hevc_nvenc", "hevc_amf", "hevc_qsv", "hevc_videotoolbox")

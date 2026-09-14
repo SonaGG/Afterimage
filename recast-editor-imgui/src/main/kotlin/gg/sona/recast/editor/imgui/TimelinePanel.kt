@@ -23,7 +23,7 @@ import kotlin.math.ln
 class TimelinePanel(private val context: EditorContext) :
     AbstractPanel("Timeline", DockArea.BOTTOM, Icon.CLOCK, flags = ImGuiWindowFlags.NoScrollbar) {
 
-    private enum class DragKind { NONE, SCRUB, IN_POINT, OUT_POINT, KEYFRAMES, VALUE_KEY, VIEW_KEY, MARKER, TIMELAPSE, CLIP_BODY, CLIP_START, CLIP_END, PAN, BOX, NAV_THUMB, NAV_LEFT, NAV_RIGHT }
+    private enum class DragKind { NONE, SCRUB, IN_POINT, OUT_POINT, KEYFRAMES, VALUE_KEY, VIEW_KEY, PACK_KEY, MARKER, TIMELAPSE, CLIP_BODY, CLIP_START, CLIP_END, PAN, BOX, NAV_THUMB, NAV_LEFT, NAV_RIGHT }
 
     private class PoseKey(val entityId: Int, val timeNanos: Long, val parts: Int)
 
@@ -57,6 +57,7 @@ class TimelinePanel(private val context: EditorContext) :
     private var contextKeyframe: Long? = null
     private var contextValue: ValueKey? = null
     private var contextView: Long? = null
+    private var contextPack: Long? = null
     private var dragLane: ValueLane? = null
     private var contextClip: UUID? = null
     private var contextMarker: UUID? = null
@@ -81,6 +82,7 @@ class TimelinePanel(private val context: EditorContext) :
     private var keyTimes: LongArray = LongArray(0)
     private var valueKeys: Map<ValueLane, List<Keyframe<Double>>> = emptyMap()
     private var viewKeys: List<Keyframe<ViewState>> = emptyList()
+    private var packKeys: List<Keyframe<PackState>> = emptyList()
     private var clips: List<Clip> = emptyList()
     private var markers: List<TimelineMarker> = emptyList()
     private var timelapses: List<TimelapseMark> = emptyList()
@@ -157,6 +159,7 @@ class TimelinePanel(private val context: EditorContext) :
         drawCameraLane(drawList, session, frame.nowNanos)
         for (lane in ValueLane.entries) if (lanes.any { it.kind == lane.kind }) drawValueLane(drawList, session, lane)
         if (lanes.any { it.kind == LaneKind.VIEW }) drawViewLane(drawList, session)
+        if (lanes.any { it.kind == LaneKind.TEXTURE_PACK }) drawPackLane(drawList, session)
         drawClipLane(drawList, session)
         drawMarkerLane(drawList, session)
         drawTimelapseLane(drawList, session)
@@ -201,6 +204,7 @@ class TimelinePanel(private val context: EditorContext) :
         keyTimes = LongArray(keyframes.size) { keyframes[it].timeNanos }
         valueKeys = ValueLane.entries.associateWith { session.project.valueTrack(it).keyframes.toList() }
         viewKeys = session.project.views.keyframes.toList()
+        packKeys = session.project.packs.keyframes.toList()
         clips = session.project.clips.toList()
         markers = session.project.markers.toList()
         timelapses = session.project.timelapses.toList()
@@ -305,6 +309,7 @@ class TimelinePanel(private val context: EditorContext) :
     private fun laneVisible(kind: LaneKind, view: TimelineView): Boolean = when (kind) {
         LaneKind.CAMERA, LaneKind.CLIPS, LaneKind.MARKERS, LaneKind.EVENTS -> true
         LaneKind.VIEW -> viewKeys.isNotEmpty() || kind in view.shownLanes
+        LaneKind.TEXTURE_PACK -> packKeys.isNotEmpty() || kind in view.shownLanes
         LaneKind.TIMELAPSE -> timelapses.isNotEmpty() || kind in view.shownLanes
         LaneKind.POSE -> poseKeys.isNotEmpty() || kind in view.shownLanes
         LaneKind.PLAYERS -> kind in view.shownLanes || (gameLanes.playerRows.isNotEmpty() && kind !in view.hiddenLanes)
@@ -319,6 +324,7 @@ class TimelinePanel(private val context: EditorContext) :
 
     private fun laneEmpty(kind: LaneKind): Boolean = when (kind) {
         LaneKind.VIEW -> viewKeys.isEmpty()
+        LaneKind.TEXTURE_PACK -> packKeys.isEmpty()
         LaneKind.TIMELAPSE -> timelapses.isEmpty()
         LaneKind.POSE -> poseKeys.isEmpty()
         LaneKind.PLAYERS, LaneKind.WORLD, LaneKind.MOMENTS -> false
@@ -438,7 +444,7 @@ class TimelinePanel(private val context: EditorContext) :
                         }
                     }
 
-                    LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY -> {
+                    LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
                         val valueLane = ValueLane.entries.first { it.kind == lane.kind }
                         ImGui.setCursorScreenPos(x, y)
                         if (reveal && Widgets.iconButton(
@@ -481,6 +487,28 @@ class TimelinePanel(private val context: EditorContext) :
                             size,
                             if (state.muted) "Enable view switches" else "Disable view switches"
                         )?.let { session.execute(SetLaneState(LaneKind.VIEW, state.copy(muted = !it))) }
+                    }
+
+                    LaneKind.TEXTURE_PACK -> {
+                        ImGui.setCursorScreenPos(x, y)
+                        if (reveal && Widgets.iconButton(
+                                "add",
+                                Icon.PLUS,
+                                size,
+                                "Add texture pack keyframe: the packs chosen here stay applied until the next keyframe",
+                                iconScale = 0.55f
+                            )
+                        ) addPackKeyframe(session, session.playheadNanos)
+                        x -= size + 2f
+                        ImGui.setCursorScreenPos(x, y)
+                        val state = project.lane(LaneKind.TEXTURE_PACK)
+                        if (reveal || state.muted) Widgets.iconToggle(
+                            "eye",
+                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
+                            !state.muted,
+                            size,
+                            if (state.muted) "Enable texture pack switches" else "Disable texture pack switches"
+                        )?.let { session.execute(SetLaneState(LaneKind.TEXTURE_PACK, state.copy(muted = !it))) }
                     }
 
                     LaneKind.CLIPS -> {
@@ -807,6 +835,21 @@ class TimelinePanel(private val context: EditorContext) :
                 }
             }
 
+            LaneKind.TEXTURE_PACK -> {
+                if (ImGui.menuItem("Add texture pack keyframe at playhead")) addPackKeyframe(session, session.playheadNanos)
+                if (ImGui.menuItem(if (state.muted) "Enable" else "Disable")) session.execute(
+                    SetLaneState(lane.kind, state.copy(muted = !state.muted))
+                )
+                ImGui.separator()
+                if (packKeys.isEmpty()) {
+                    if (ImGui.menuItem("Hide track")) view.shownLanes.remove(lane.kind)
+                } else if (ImGui.menuItem("Clear and hide track")) {
+                    session.execute(RemovePackKeyframes(packKeys.map { it.timeNanos }.toSet()))
+                    session.selection = Selection.NONE
+                    view.shownLanes.remove(lane.kind)
+                }
+            }
+
             LaneKind.CLIPS -> if (ImGui.menuItem("Clip from in/out")) clipFromInOut(session)
             LaneKind.MARKERS -> if (ImGui.menuItem("Add marker at playhead", "M")) addMarker(
                 session,
@@ -916,7 +959,7 @@ class TimelinePanel(private val context: EditorContext) :
                 "add-track",
                 Icon.PLUS,
                 size,
-                if (hiddenLanes.isEmpty()) "All tracks are shown" else "Show a track: speed ramps, FOV, time of day, shake, view switches or freezes",
+                if (hiddenLanes.isEmpty()) "All tracks are shown" else "Show a track: speed ramps, FOV, focus, time of day, shake, view switches, texture packs or freezes",
                 enabled = hiddenLanes.isNotEmpty(),
                 iconScale = 0.6f
             )
@@ -930,6 +973,7 @@ class TimelinePanel(private val context: EditorContext) :
                         LaneKind.PLAYERS -> "One row per player with presence, health, kills and deaths."
                         LaneKind.WORLD -> "Block changes, explosions, projectiles, sounds and dimension changes."
                         LaneKind.MOMENTS -> "Detected and kept moments: kills, clutches, fights, escapes."
+                        LaneKind.TEXTURE_PACK -> "Texture pack keyframes switch resource packs over time."
                         else -> "View keyframes switch between camera modes and targets over time."
                     }
                 if (ImGui.menuItem(lane.label)) {
@@ -1268,6 +1312,79 @@ class TimelinePanel(private val context: EditorContext) :
                 }
                 drawList.popClipRect()
             }
+        }
+    }
+
+    private fun drawPackLane(drawList: ImDrawList, session: EditorSession) {
+        val top = laneTop(LaneKind.TEXTURE_PACK)
+        val height = laneHeight(LaneKind.TEXTURE_PACK)
+        val muted = session.project.lane(LaneKind.TEXTURE_PACK).muted
+        val alpha = if (muted) 0.4f else 1f
+        val selection = session.selection.packTimes
+        for ((index, frame) in packKeys.withIndex()) {
+            val time = if (drag == DragKind.PACK_KEY && dragId == frame.timeNanos) dragCurrentNanos else frame.timeNanos
+            val next = packKeys.getOrNull(index + 1)?.timeNanos ?: duration
+            val left = xAt(time)
+            val right = minOf(xAt(next), originX + width)
+            if (right < originX || left > originX + width) continue
+            val selected = frame.timeNanos in selection
+            val y1 = top + 4f
+            val y2 = top + height - 4f
+            drawList.addRectFilled(left, y1, maxOf(right, left + 3f), y2, EditorTheme.CONTROL_ACTIVE.u32(0.55f * alpha), 3f)
+            drawList.addRectFilled(left, y1, left + 3f, y2, EditorTheme.PURPLE.u32(alpha), 2f)
+            if (selected) drawList.addRect(left, y1, maxOf(right, left + 3f), y2, EditorTheme.SELECTION.u32, 3f, 0, 1.5f)
+            if (right - left > 30f) {
+                drawList.pushClipRect(left + 5f, y1, right - 2f, y2, true)
+                EditorFonts.with(EditorFonts.small) {
+                    drawList.addText(
+                        left + 7f,
+                        y1 + (y2 - y1 - ImGui.getFontSize()) / 2f,
+                        EditorTheme.TEXT.u32(alpha),
+                        packLabel(frame.value)
+                    )
+                }
+                drawList.popClipRect()
+            }
+        }
+    }
+
+    private fun packLabel(state: PackState): String =
+        if (state.isDefault) "Default textures" else state.packs.joinToString(", ") { it.removeSuffix(".zip") }
+
+    private fun nearestPackKey(mouseX: Float): Keyframe<PackState>? =
+        packKeys.lastOrNull { xAt(it.timeNanos) - 4f <= mouseX }?.takeIf { frame ->
+            val index = packKeys.indexOf(frame)
+            val next = packKeys.getOrNull(index + 1)?.timeNanos ?: duration
+            mouseX <= xAt(next) + 2f
+        }
+
+    private fun addPackKeyframe(session: EditorSession, nanos: Long) {
+        val current = session.project.packAt(nanos) ?: PackState(context.host.activeResourcePacks())
+        session.execute(SetPackKeyframe(nanos, current))
+        session.selection = Selection(packTimes = setOf(nanos))
+        val state = session.project.lane(LaneKind.TEXTURE_PACK)
+        if (state.muted) session.execute(SetLaneState(LaneKind.TEXTURE_PACK, state.copy(muted = false)))
+    }
+
+    private fun packMenu(session: EditorSession, replay: ReplaySession, time: Long) {
+        val frame = session.project.packs.at(time) ?: return
+        Widgets.mutedText("${packLabel(frame.value)} from ${TimeFormat.clock(time)}")
+        ImGui.separator()
+        if (ImGui.menuItem("Go to")) replay.seek(time)
+        ImGui.separator()
+        if (ImGui.menuItem("Default textures", "", frame.value.isDefault)) session.execute(SetPackKeyframe(time, PackState.DEFAULT))
+        val available = context.host.resourcePacks()
+        if (available.isEmpty()) Widgets.mutedText("No packs in the resourcepacks folder")
+        for (pack in available) {
+            if (ImGui.menuItem(pack.removeSuffix(".zip"), "", pack in frame.value.packs)) session.execute(
+                SetPackKeyframe(time, frame.value.toggled(pack))
+            )
+        }
+        Widgets.tooltip("Packs listed later override earlier ones, like the in-game resource pack screen. Switching packs reloads textures, which takes a moment.")
+        ImGui.separator()
+        if (ImGui.menuItem("Delete texture pack keyframe", "Del")) {
+            session.execute(RemovePackKeyframes(setOf(time)))
+            session.selection = Selection.NONE
         }
     }
 
@@ -1668,7 +1785,7 @@ class TimelinePanel(private val context: EditorContext) :
                 )
             }
 
-            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY -> {
+            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
                 val valueLane = ValueLane.entries.first { it.kind == lane.kind }
                 nearestValueKey(valueLane, mouseX)?.let { frame ->
                     ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
@@ -1679,6 +1796,11 @@ class TimelinePanel(private val context: EditorContext) :
             LaneKind.VIEW -> nearestViewKey(mouseX)?.let { frame ->
                 ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
                 ImGui.setTooltip("${viewLabel(frame.value)} from ${TimeFormat.clock(frame.timeNanos)}\nDrag to move  -  right-click for actions")
+            }
+
+            LaneKind.TEXTURE_PACK -> nearestPackKey(mouseX)?.let { frame ->
+                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
+                ImGui.setTooltip("${packLabel(frame.value)} from ${TimeFormat.clock(frame.timeNanos)}\nDrag to move  -  right-click to choose packs")
             }
 
             LaneKind.CLIPS -> clipAt(mouseX, mouseY)?.let { clip ->
@@ -1852,6 +1974,16 @@ class TimelinePanel(private val context: EditorContext) :
                 }
             }
 
+            LaneKind.TEXTURE_PACK -> {
+                if (nearestPackKey(mouseX) == null) {
+                    addPackKeyframe(
+                        session,
+                        snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
+                    )
+                    return true
+                }
+            }
+
             else -> {
                 val valueLane = ValueLane.entries.firstOrNull { it.kind == lane.kind } ?: return false
                 if (nearestValueKey(valueLane, mouseX) == null) {
@@ -1940,7 +2072,7 @@ class TimelinePanel(private val context: EditorContext) :
                 return true
             }
 
-            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY -> {
+            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
                 val valueLane = ValueLane.entries.first { it.kind == lane.kind }
                 val hit = nearestValueKey(valueLane, mouseX) ?: return false
                 session.selection = session.selection.withValueKeyframe(valueLane, hit.timeNanos, additive)
@@ -1956,6 +2088,16 @@ class TimelinePanel(private val context: EditorContext) :
                 val hit = nearestViewKey(mouseX) ?: return false
                 session.selection = session.selection.withViewKeyframe(hit.timeNanos, additive)
                 drag = DragKind.VIEW_KEY
+                dragId = hit.timeNanos
+                dragOriginNanos = hit.timeNanos
+                dragCurrentNanos = hit.timeNanos
+                return true
+            }
+
+            LaneKind.TEXTURE_PACK -> {
+                val hit = nearestPackKey(mouseX) ?: return false
+                session.selection = session.selection.withPackKeyframe(hit.timeNanos, additive)
+                drag = DragKind.PACK_KEY
                 dragId = hit.timeNanos
                 dragOriginNanos = hit.timeNanos
                 dragCurrentNanos = hit.timeNanos
@@ -2068,7 +2210,7 @@ class TimelinePanel(private val context: EditorContext) :
                 dragDelta = maxOf(-anchor, snapped - anchor)
             }
 
-            DragKind.VALUE_KEY, DragKind.VIEW_KEY, DragKind.MARKER, DragKind.TIMELAPSE -> dragCurrentNanos =
+            DragKind.VALUE_KEY, DragKind.VIEW_KEY, DragKind.PACK_KEY, DragKind.MARKER, DragKind.TIMELAPSE -> dragCurrentNanos =
                 snap(nanosAt(mouseX), view, emptySet()).coerceIn(0L, duration)
 
             DragKind.CLIP_BODY -> {
@@ -2168,6 +2310,14 @@ class TimelinePanel(private val context: EditorContext) :
                 }
             }
 
+            DragKind.PACK_KEY -> {
+                val from = dragId as Long
+                if (dragCurrentNanos != from) {
+                    session.execute(MovePackKeyframe(from, dragCurrentNanos))
+                    session.selection = Selection(packTimes = setOf(dragCurrentNanos))
+                }
+            }
+
             DragKind.MARKER -> {
                 val marker = session.project.marker(dragId as UUID)
                 if (marker != null && dragCurrentNanos != marker.nanos) session.execute(
@@ -2229,6 +2379,9 @@ class TimelinePanel(private val context: EditorContext) :
         if (overlaps(y1, y2, LaneKind.VIEW)) selection =
             selection.copy(viewTimes = selection.viewTimes + viewKeys.filter { it.timeNanos in from..to }
                 .map { it.timeNanos })
+        if (overlaps(y1, y2, LaneKind.TEXTURE_PACK)) selection =
+            selection.copy(packTimes = selection.packTimes + packKeys.filter { it.timeNanos in from..to }
+                .map { it.timeNanos })
         if (overlaps(y1, y2, LaneKind.CLIPS)) selection =
             selection.copy(clipIds = selection.clipIds + clips.filter { it.endNanos >= from && it.startNanos <= to }
                 .map { it.id })
@@ -2252,6 +2405,7 @@ class TimelinePanel(private val context: EditorContext) :
         contextKeyframe = null
         contextValue = null
         contextView = null
+        contextPack = null
         contextClip = null
         contextMarker = null
         contextTimelapse = null
@@ -2266,7 +2420,7 @@ class TimelinePanel(private val context: EditorContext) :
                     Selection(keyframeTimes = setOf(it.timeNanos))
             }
 
-            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY -> {
+            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
                 val valueLane = ValueLane.entries.first { it.kind == lane.kind }
                 nearestValueKey(valueLane, mouseX)?.let {
                     contextValue = ValueKey(valueLane, it.timeNanos)
@@ -2280,6 +2434,12 @@ class TimelinePanel(private val context: EditorContext) :
                 contextView = it.timeNanos
                 if (it.timeNanos !in session.selection.viewTimes) session.selection =
                     Selection(viewTimes = setOf(it.timeNanos))
+            }
+
+            LaneKind.TEXTURE_PACK -> nearestPackKey(mouseX)?.let {
+                contextPack = it.timeNanos
+                if (it.timeNanos !in session.selection.packTimes) session.selection =
+                    Selection(packTimes = setOf(it.timeNanos))
             }
 
             LaneKind.CLIPS -> clipAt(mouseX, mouseY)?.let {
@@ -2315,6 +2475,7 @@ class TimelinePanel(private val context: EditorContext) :
         val keyframe = contextKeyframe
         val value = contextValue
         val viewTime = contextView
+        val packTime = contextPack
         val clipId = contextClip
         val markerId = contextMarker
         val timelapseId = contextTimelapse
@@ -2327,6 +2488,7 @@ class TimelinePanel(private val context: EditorContext) :
 
             value != null -> valueMenu(session, value)
             viewTime != null -> viewMenu(session, replay, viewTime)
+            packTime != null -> packMenu(session, replay, packTime)
             clipId != null -> session.project.clip(clipId)?.let { clipMenu(session, replay, it) }
             markerId != null -> session.project.marker(markerId)?.let { markerMenu(session, it) }
             timelapseId != null -> session.project.timelapse(timelapseId)?.let { timelapseMenu(session, replay, it) }
@@ -2560,6 +2722,7 @@ class TimelinePanel(private val context: EditorContext) :
             at
         )
         if (contextLane == LaneKind.VIEW && ImGui.menuItem("Add view keyframe here")) addViewKeyframe(session, at)
+        if (contextLane == LaneKind.TEXTURE_PACK && ImGui.menuItem("Add texture pack keyframe here")) addPackKeyframe(session, at)
         if (contextLane == LaneKind.TIMELAPSE && ImGui.menuItem("Add timelapse skip here")) addTimelapse(session, at)
         if (ImGui.beginMenu("Add keyframe")) {
             for (lane in ValueLane.entries) if (ImGui.menuItem("${lane.label} keyframe")) addValueKeyframe(
@@ -2568,6 +2731,7 @@ class TimelinePanel(private val context: EditorContext) :
                 at
             )
             if (ImGui.menuItem("View keyframe")) addViewKeyframe(session, at)
+            if (ImGui.menuItem("Texture pack keyframe")) addPackKeyframe(session, at)
             ImGui.endMenu()
         }
         if (contextLane == LaneKind.MOMENTS && ImGui.menuItem("Add moment here")) gameLanes.addManual(session, at)
@@ -2620,6 +2784,7 @@ class TimelinePanel(private val context: EditorContext) :
         ValueLane.SHAKE -> context.host.camera.settings.shakeStrength
         ValueLane.FREEZE -> ValueLane.FREEZE.default
         ValueLane.SHAKE_FREQUENCY -> context.host.camera.settings.shakeFrequencyHz
+        ValueLane.FOCUS -> session.focusDistanceAt(session.playheadNanos, context.host.camera.currentPose().position)
     }
 
     private fun addViewKeyframe(session: EditorSession, nanos: Long) {
@@ -2783,6 +2948,8 @@ class TimelinePanel(private val context: EditorContext) :
             LaneKind.SHAKE_FREQUENCY to Icon.WAVE,
             LaneKind.VIEW to Icon.EYE,
             LaneKind.FREEZE to Icon.SNOWFLAKE,
+            LaneKind.FOCUS to Icon.FOCUS,
+            LaneKind.TEXTURE_PACK to Icon.PACKAGE,
             LaneKind.CLIPS to Icon.FILM,
             LaneKind.MARKERS to Icon.MARKER,
             LaneKind.TIMELAPSE to Icon.FAST_FORWARD,
@@ -2796,10 +2963,12 @@ class TimelinePanel(private val context: EditorContext) :
             Lane(LaneKind.CAMERA, "Camera", 30f, EditorTheme.KEYFRAME_SMOOTH),
             Lane(LaneKind.SPEED, "Speed", 28f, EditorTheme.SUCCESS),
             Lane(LaneKind.FOV, "FOV", 26f, EditorTheme.KEYFRAME_BEZIER),
+            Lane(LaneKind.FOCUS, "Focus", 26f, EditorTheme.MINT),
             Lane(LaneKind.TIME_OF_DAY, "Time of day", 26f, EditorTheme.WARNING),
             Lane(LaneKind.SHAKE, "Shake", 26f, EditorTheme.RECORD),
             Lane(LaneKind.SHAKE_FREQUENCY, "Shake Hz", 24f, EditorTheme.RECORD),
             Lane(LaneKind.VIEW, "View", 26f, EditorTheme.ACCENT_TEXT),
+            Lane(LaneKind.TEXTURE_PACK, "Texture pack", 26f, EditorTheme.PURPLE),
             Lane(LaneKind.FREEZE, "Freeze", 24f, EditorTheme.TIMECODE),
             Lane(LaneKind.CLIPS, "Clips", 32f, EditorTheme.CLIP_SELECTED),
             Lane(LaneKind.MARKERS, "Markers", 24f, EditorTheme.MARKER),
@@ -2831,6 +3000,7 @@ class TimelinePanel(private val context: EditorContext) :
             ValueLane.SHAKE to doubleArrayOf(0.0, 0.5, 1.0, 2.0),
             ValueLane.FREEZE to doubleArrayOf(0.5, 1.0, 2.0, 5.0),
             ValueLane.SHAKE_FREQUENCY to doubleArrayOf(0.5, 1.6, 4.0, 10.0),
+            ValueLane.FOCUS to doubleArrayOf(2.0, 4.0, 8.0, 16.0, 32.0),
         )
         val VALUE_ADD_TOOLTIPS = mapOf(
             ValueLane.SPEED to "Add speed keyframe with the current playback speed",
@@ -2839,6 +3009,7 @@ class TimelinePanel(private val context: EditorContext) :
             ValueLane.SHAKE to "Add camera shake keyframe with the current shake strength",
             ValueLane.FREEZE to "Freeze the replay here for a number of seconds during playback and export",
             ValueLane.SHAKE_FREQUENCY to "Add shake frequency keyframe with the current frequency",
+            ValueLane.FOCUS to "Add focus keyframe with the current focus distance",
         )
         val VALUE_HINTS = mapOf(
             ValueLane.SPEED to "Speed ramps: add keyframes to slow down or speed up playback between them.",
@@ -2847,6 +3018,7 @@ class TimelinePanel(private val context: EditorContext) :
             ValueLane.SHAKE to "Shake keyframes ramp handheld camera shake in and out.",
             ValueLane.SHAKE_FREQUENCY to "Controls how fast the shake wobbles; pair with the Shake lane for a rougher or smoother handheld feel.",
             ValueLane.FREEZE to "Freeze keyframes hold the replay still for a few seconds while the camera keeps moving.",
+            ValueLane.FOCUS to "Focus keyframes rack the depth of field focus distance; turn on Depth of field in the Look panel to see it.",
         )
         val SEGMENT_COLORS =
             listOf(EditorTheme.ACCENT_TEXT, EditorTheme.WARNING, EditorTheme.SUCCESS, EditorTheme.KEYFRAME_BEZIER)

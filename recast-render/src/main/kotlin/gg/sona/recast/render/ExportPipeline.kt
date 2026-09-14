@@ -5,12 +5,11 @@ import gg.sona.recast.camera.PoseSource
 import gg.sona.recast.clip.export.ExportProgress
 import gg.sona.recast.core.log.RecastLog
 import gg.sona.recast.render.sink.FrameSink
-import gg.sona.recast.replay.session.ReplaySession
 import java.nio.file.Path
 
 class ExportPipeline(
     private val settings: ExportSettings,
-    private val replay: ReplaySession,
+    private val replay: ReplayDriver,
     private val camera: PoseSource,
     private val frames: FrameSource,
     private val sink: FrameSink,
@@ -40,7 +39,7 @@ class ExportPipeline(
         val buffer = ByteArray(pixels * 4)
         val depth = if (settings.depthMap) FloatArray(pixels) else null
         val passes = settings.projection.passes
-        val samples = settings.motionBlur.samples.coerceIn(1, 64)
+        val samples = settings.motionBlur.sampleCount
         val startedAt = System.nanoTime()
         sink.begin(settings)
         var primary: Throwable? = null
@@ -50,11 +49,10 @@ class ExportPipeline(
             var index = 0L
             var outputNanos = 0L
             while (outputNanos <= settings.outputDurationNanos && !cancelled) {
-                val frameNanos = settings.replayNanosAt(outputNanos)
                 val frameIndex = index
                 for (sample in 0 until samples) {
                     if (cancelled) break
-                    val sampleNanos = if (samples == 1) frameNanos else sampleNanos(outputNanos, sample, samples)
+                    val sampleNanos = sampleNanos(outputNanos, sample)
                     for (pass in 0 until passes) {
                         if (cancelled) break
                         renderThread.call {
@@ -65,17 +63,10 @@ class ExportPipeline(
                         }
                     }
                     if (cancelled) break
-                    renderThread.call {
-                        frames.compose(
-                            buffer,
-                            if (sample == samples / 2) depth else null,
-                            sample,
-                            samples
-                        )
-                    }
+                    val delivered = renderThread.call { frames.compose(buffer, depth, sample, samples) }
+                    if (delivered != FrameSource.NO_FRAME) deliver(delivered, buffer, depth)
                 }
                 if (cancelled) break
-                sink.accept(RenderedFrame(frameIndex, frameNanos, settings.width, settings.height, buffer, depth))
                 index++
                 framesDone = index
                 outputNanos += settings.frameIntervalNanos
@@ -85,7 +76,7 @@ class ExportPipeline(
                     val fps = index / elapsed
                     val remaining = if (fps > 0.0) (frameCount - index) / fps else 0.0
                     status = String.format(
-                        "frame %d / %d  ·  %.1f fps  ·  %s left",
+                        "frame %d of %d, %.1f fps, %s left",
                         index,
                         frameCount,
                         fps,
@@ -94,14 +85,19 @@ class ExportPipeline(
                     report.detail(status)
                 }
             }
+            if (!cancelled) {
+                val delivered = renderThread.call { frames.flush(buffer, depth) }
+                if (delivered != FrameSource.NO_FRAME) deliver(delivered, buffer, depth)
+            }
             logger.info("Rendered $index frames to ${settings.output.fileName}")
         } catch (error: Throwable) {
             primary = error
             throw error
         } finally {
             runCatching { renderThread.call { frames.release() } }.onFailure { if (primary == null) throw it }
+            frames.warnings().forEach(report.warn)
             try {
-                sink.close()
+                if (cancelled || primary != null) sink.abort() else sink.close()
             } catch (error: Throwable) {
                 if (primary == null) throw IllegalStateException("${error.message} (after $framesDone frames)", error)
                 logger.warn("Sink close failed after an earlier error", error)
@@ -111,11 +107,14 @@ class ExportPipeline(
         return settings.output
     }
 
-    private fun sampleNanos(outputNanos: Long, sample: Int, samples: Int): Long {
-        val interval = settings.frameIntervalNanos
-        val shutter = settings.motionBlur.shutter.coerceIn(0.05, 1.0)
-        val offset = ((sample + 0.5) / samples - 0.5) * shutter * interval
-        return settings.replayNanosAt((outputNanos + offset.toLong()).coerceIn(0L, settings.outputDurationNanos))
+    private fun deliver(index: Long, buffer: ByteArray, depth: FloatArray?) {
+        val nanos = settings.replayNanosAt(index * settings.frameIntervalNanos)
+        sink.accept(RenderedFrame(index, nanos, settings.width, settings.height, buffer, depth))
+    }
+
+    private fun sampleNanos(outputNanos: Long, sample: Int): Long {
+        val offset = settings.motionBlur.offsetNanos(sample, settings.frameIntervalNanos)
+        return settings.replayNanosAt((outputNanos + offset).coerceIn(0L, settings.outputDurationNanos))
     }
 
     private fun clock(seconds: Double): String {

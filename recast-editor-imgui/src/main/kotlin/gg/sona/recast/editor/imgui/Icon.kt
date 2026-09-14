@@ -92,7 +92,12 @@ enum class Icon(val lucide: String, val codepoint: Int) {
     SNOWFLAKE("snowflake", 0xE165),
     CIRCLE("circle", 0xE076),
     GRAPH("chart-spline", 0xE60D),
-    AUTO_KEY("circle-dot", 0xE345);
+    AUTO_KEY("circle-dot", 0xE345),
+    FOCUS("focus", 0xE29E),
+    PACKAGE("package", 0xE129),
+    PALETTE("palette", 0xE1DD),
+    SPARKLES("sparkles", 0xE412),
+    CONTRAST("contrast", 0xE09D);
 
     val glyph: String = String(Character.toChars(codepoint))
 }

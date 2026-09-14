@@ -724,6 +724,48 @@ object Widgets {
         }
     }
 
+    fun chip(
+        text: String,
+        color: Int = EditorTheme.TEXT_MUTED.u32,
+        background: Int = EditorTheme.CONTROL.u32,
+        lineHeight: Float = ImGui.getFrameHeight(),
+    ) {
+        val list = ImGui.getWindowDrawList()
+        EditorFonts.with(EditorFonts.smallMedium) {
+            ImGui.calcTextSize(measure, text)
+            val padX = EditorFonts.px(7f)
+            val height = measure.y + EditorFonts.px(6f)
+            val x = ImGui.getCursorScreenPosX()
+            val y = ImGui.getCursorScreenPosY() + maxOf(0f, (lineHeight - height) / 2f)
+            list.addRectFilled(x, y, x + measure.x + padX * 2f, y + height, background, EditorFonts.px(5f))
+            list.addText(x + padX, y + EditorFonts.px(3f), color, text)
+            ImGui.dummy(measure.x + padX * 2f, maxOf(height, lineHeight))
+        }
+    }
+
+    fun chipWidth(text: String): Float =
+        EditorFonts.with(EditorFonts.smallMedium) { textWidth(text) } + EditorFonts.px(14f)
+
+    fun chipsWidth(parts: List<String>, gap: Float = EditorFonts.px(4f)): Float =
+        parts.sumOf { chipWidth(it).toDouble() }.toFloat() + gap * (parts.size - 1).coerceAtLeast(0)
+
+    fun chips(
+        parts: List<String>,
+        color: Int = EditorTheme.TEXT_MUTED.u32,
+        background: Int = EditorTheme.CONTROL.u32,
+        lineHeight: Float = ImGui.getFrameHeight(),
+        gap: Float = EditorFonts.px(4f),
+    ) {
+        if (parts.isEmpty()) {
+            ImGui.dummy(1f, lineHeight)
+            return
+        }
+        for ((index, part) in parts.withIndex()) {
+            if (index > 0) ImGui.sameLine(0f, gap)
+            chip(part, color, background, lineHeight)
+        }
+    }
+
     fun solidPill(text: String, color: EditorTheme.Rgb) {
         val list = ImGui.getWindowDrawList()
         EditorFonts.with(EditorFonts.smallMedium) {

@@ -17,7 +17,11 @@ object Libav {
 
     fun describe(code: Int): String {
         val buffer = BytePointer(256L)
-        return if (avutil.av_strerror(code, buffer, 256L) == 0) buffer.string else "error $code"
+        if (avutil.av_strerror(code, buffer, 256L) != 0) return "error $code"
+        val bytes = ByteArray(256)
+        buffer.get(bytes)
+        val end = bytes.indexOf(0).let { if (it < 0) bytes.size else it }
+        return String(bytes, 0, end, Charsets.UTF_8)
     }
 
     fun context(): String {

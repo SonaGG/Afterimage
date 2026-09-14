@@ -12,16 +12,18 @@ import org.bytedeco.ffmpeg.global.avutil
 import java.nio.file.Files
 import java.nio.file.Path
 
-class MediaOutput(private val path: Path) : AutoCloseable {
+class MediaOutput(private val path: Path, container: Path = path) : AutoCloseable {
     val context: AVFormatContext = AVFormatContext(null)
     private var open = false
     private var headerWritten = false
 
     init {
         Files.createDirectories(path.toAbsolutePath().parent)
+        val format = avformat.av_guess_format(null as String?, container.fileName.toString(), null as String?)
+            ?: throw IllegalStateException("no container for ${container.fileName}")
         Libav.check(
-            avformat.avformat_alloc_output_context2(context, null, null as String?, path.toString()),
-            "no container for ${path.fileName}"
+            avformat.avformat_alloc_output_context2(context, format, null as String?, path.toString()),
+            "no container for ${container.fileName}"
         )
     }
 

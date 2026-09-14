@@ -25,7 +25,6 @@ import org.lwjgl.opengl.GL11
 import org.lwjgl.opengl.GL14
 import org.lwjgl.opengl.GL30
 import java.nio.ByteBuffer
-import java.nio.FloatBuffer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -42,6 +41,7 @@ class FramebufferExporter(
     private val camera: CameraDriver,
     private val workspace: WorkspaceHost,
     private val ffmpeg: FfmpegRuntime,
+    private val post: PostProcessor,
 ) : ExportBackend, FrameSource, MainThreadExecutor {
 
     private class FrameRequest(val action: () -> Any?, val latch: CountDownLatch) {
@@ -60,7 +60,6 @@ class FramebufferExporter(
     private val pending = AtomicReference<FrameRequest?>(null)
     private var started: FrameRequest? = null
     private var readback: ByteBuffer? = null
-    private var depthReadback: FloatBuffer? = null
     private var previousHideGui = false
     private var exporting = false
     private var settings: ExportSettings? = null
@@ -73,12 +72,30 @@ class FramebufferExporter(
     private var currentPipeline: ExportPipeline? = null
     private var exportStartedNanos = 0L
     private var passBuffers: Array<ByteArray> = emptyArray()
-    private var passDepth: FloatArray? = null
     private var lut: EquirectLut? = null
 
-    private var accumTarget: RenderTarget? = null
+    private var accumulation: AccumulationBuffer? = null
     private var accumPending = false
-    private var finalReadback: ByteBuffer? = null
+    private var readbackStaging: ByteBuffer? = null
+    private var postBuffer: AccumulationBuffer? = null
+    private var depthBuffer: DepthMapBuffer? = null
+    private var depthStaging: ByteBuffer? = null
+    private val depthTexture = DepthTexture()
+    private var depthWanted = false
+    private var depthCaptured = false
+    private var sampleIndex = -1
+    private var frameFocus = 8.0
+    private var currentIndex = FrameSource.NO_FRAME
+    private var currentSlot = 0
+    private var pendingIndex = FrameSource.NO_FRAME
+    private var pendingSlot = 0
+    private var pendingPost = false
+    private var lookRequested = false
+    var focusDistance: (Long, CameraPose) -> Double = { _, _ -> 8.0 }
+
+    val transparentExport: Boolean get() = exporting && settings?.transparent == true
+    private var incompleteChunkFrames = 0
+    private val missingSkinPlayers = HashSet<Int>()
     private var equirectAccumulator: IntArray? = null
     private var equirectScratch: ByteArray? = null
 
@@ -111,9 +128,8 @@ class FramebufferExporter(
         var index = 2
         fun taken(path: Path): Boolean {
             val sequenceFolder = path.resolveSibling(path.fileName.toString().substringBeforeLast('.'))
-            return reservedOutputs.contains(path.toAbsolutePath()) || Files.exists(path) || Files.isDirectory(
-                sequenceFolder
-            )
+            return reservedOutputs.contains(path.toAbsolutePath()) || Files.exists(path) ||
+                    Files.exists(LibavVideoSink.partFile(path)) || Files.isDirectory(sequenceFolder)
         }
         while (taken(candidate) && index < 10_000) {
             candidate = requested.resolveSibling("$stem ($index)$extension")
@@ -142,7 +158,7 @@ class FramebufferExporter(
             else -> LibavVideoSink(ffmpeg.encoders())
         }
         val poseSource = PoseSource { nanos -> camera.exportPoseAt(nanos) }
-        val pipeline = ExportPipeline(settings, session, poseSource, this, AsyncFrameSink(sink), this)
+        val pipeline = ExportPipeline(settings, session.exportDriver(), poseSource, this, AsyncFrameSink(sink), this)
         val render = RenderJob(pipeline, "export ${request.title}")
         currentPipeline = pipeline
         return exports.submit(object : ExportJob {
@@ -171,7 +187,7 @@ class FramebufferExporter(
         val base = output.fileName.toString().substringBeforeLast('.')
         val wav = output.resolveSibling("$base.wav")
         try {
-            if (events.isNotEmpty()) report.detail("mixing game audio · ${events.size} sounds")
+            if (events.isNotEmpty()) report.detail("mixing ${events.size} game sounds")
             val mix = GameAudioMixer.mix(
                 events,
                 settings.outputDurationNanos + settings.frameIntervalNanos,
@@ -194,9 +210,11 @@ class FramebufferExporter(
             } catch (error: Throwable) {
                 Files.deleteIfExists(muxed)
                 logger.warn("Recast could not mux audio into {}", output, error)
+                report.warn("Audio could not be muxed into the video: ${error.message}")
             }
         } catch (error: Throwable) {
             logger.warn("Recast could not render audio for {}", output, error)
+            report.warn("Audio could not be rendered: ${error.message}")
         } finally {
             sounds.clips.clear()
         }
@@ -209,6 +227,8 @@ class FramebufferExporter(
         camera.exporting = true
         chunks.calibrate()
         skinGiveUp.clear()
+        missingSkinPlayers.clear()
+        incompleteChunkFrames = 0
         skinWaitFrames = 0
         exportStartedNanos = System.nanoTime()
         sounds.reset()
@@ -220,33 +240,52 @@ class FramebufferExporter(
         minecraft.options.hideGui = true
         workspace.close()
         onExportStarted()
-        val supersample = settings.supersample.coerceIn(1, 4)
+        val supersample = settings.supersampleFactor
         val (passWidth, passHeight) = passSize(settings)
         renderWidth = passWidth * supersample
         renderHeight = passHeight * supersample
         exportTarget?.destroyBuffers()
         exportTarget = RenderTarget(renderWidth, renderHeight, true).also {
-            it.setClearColor(0f, 0f, 0f, 1f)
+            it.setClearColor(0f, 0f, 0f, if (settings.transparent) 0f else 1f)
             it.setFilterMode(GL11.GL_LINEAR)
         }
         val equirect = settings.projection == ExportProjection.EQUIRECTANGULAR
-        accumTarget?.destroyBuffers()
+        val depthCapable =
+            settings.projection == ExportProjection.PERSPECTIVE || settings.projection == ExportProjection.ORTHOGRAPHIC
+        accumulation?.destroy()
+        accumulation = null
+        postBuffer?.destroy()
+        postBuffer = null
+        depthBuffer?.destroy()
+        depthBuffer = null
+        depthStaging = null
+        depthTexture.destroy()
+        depthWanted = depthCapable && (settings.depthMap || settings.depthOfField)
+        lookRequested = settings.lookActive
+        depthCaptured = false
+        sampleIndex = -1
+        accumPending = false
+        currentIndex = FrameSource.NO_FRAME
+        pendingIndex = FrameSource.NO_FRAME
+        pendingPost = false
         if (equirect) {
-            accumTarget = null
-            finalReadback = null
+            readbackStaging = null
             passBuffers = Array(settings.projection.passes) { ByteArray(renderWidth * renderHeight * 4) }
             readback = BufferUtils.createByteBuffer(renderWidth * renderHeight * 4)
         } else {
             GlStateManager.bindTexture(exportTarget!!.colorTextureId)
             GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR)
             GlStateManager.bindTexture(0)
-            accumTarget = RenderTarget(settings.width, settings.height, false)
-            finalReadback = BufferUtils.createByteBuffer(settings.width * settings.height * 4)
+            accumulation = AccumulationBuffer(settings.width, settings.height)
+            readbackStaging = BufferUtils.createByteBuffer(settings.width * settings.height * 4)
+            if (settings.lookActive && post.available) postBuffer = AccumulationBuffer(settings.width, settings.height, GL11.GL_RGBA8)
+            if (settings.depthMap && depthCapable) {
+                depthBuffer = DepthMapBuffer(settings.width, settings.height)
+                depthStaging = BufferUtils.createByteBuffer(settings.width * settings.height * 2)
+            }
             passBuffers = emptyArray()
             readback = null
         }
-        passDepth = if (settings.depthMap) FloatArray(renderWidth * renderHeight) else null
-        depthReadback = if (settings.depthMap) BufferUtils.createFloatBuffer(renderWidth * renderHeight) else null
         equirectAccumulator = if (equirect && settings.motionBlur.samples.coerceIn(1, 64) > 1)
             IntArray(settings.width * settings.height * 4) else null
         equirectScratch = null
@@ -295,14 +334,15 @@ class FramebufferExporter(
         if (!exporting) return null
         val pipeline = currentPipeline
         val target = exportTarget
+        val processed = postBuffer?.takeIf { pendingPost }
         return ExportLive(
             settings,
             pipeline?.framesDone ?: 0L,
             pipeline?.frameCount ?: settings.frameCount,
             exportStartedNanos,
-            target?.colorTextureId ?: 0,
-            target?.width ?: 0,
-            target?.height ?: 0,
+            processed?.texture ?: target?.colorTextureId ?: 0,
+            processed?.width ?: target?.width ?: 0,
+            processed?.height ?: target?.height ?: 0,
             chunkWaitStatus,
         )
     }
@@ -311,12 +351,19 @@ class FramebufferExporter(
         sounds.outputNanos = outputNanos
         if (index == 0L) sounds.capturing = false
         equirectAccumulator?.let { Arrays.fill(it, 0) }
-        accumPending = accumTarget != null
+        accumPending = accumulation != null
+        currentIndex = index
+        sampleIndex = -1
+        depthCaptured = false
     }
 
     override fun renderPass(nanos: Long, pose: CameraPose, pass: Int) {
         val settings = this.settings ?: return
         camera.exportPose = passPose(settings, pose, pass)
+        if (pass == 0) {
+            sampleIndex++
+            if (sampleIndex == settings.motionBlur.sampleCount / 2) frameFocus = focusDistance(nanos, pose)
+        }
 
         sounds.capturing = settings.gameAudio
         camera.exportFov = faceFov(settings)
@@ -354,27 +401,113 @@ class FramebufferExporter(
             }
         }
 
-    override fun compose(into: ByteArray, depthInto: FloatArray?, sample: Int, samples: Int) {
-        val settings = this.settings ?: return
-        val supersample = settings.supersample.coerceIn(1, 4)
+    override fun compose(into: ByteArray, depthInto: FloatArray?, sample: Int, samples: Int): Long {
+        val settings = this.settings ?: return FrameSource.NO_FRAME
         if (settings.projection == ExportProjection.EQUIRECTANGULAR) {
             composeEquirect(into, sample, samples)
-        } else if (sample == samples - 1) {
-            readAccumulation(into, settings)
-            forceOpaque(into, settings)
+            if (sample != samples - 1) return FrameSource.NO_FRAME
+            if (depthInto != null) Arrays.fill(depthInto, 0f)
+            return currentIndex
         }
-        if (depthInto != null) {
-            val depth = passDepth
-            if (depth != null && (settings.projection == ExportProjection.PERSPECTIVE || settings.projection == ExportProjection.ORTHOGRAPHIC)) downsampleDepth(
-                depth,
-                renderWidth,
-                supersample,
-                depthInto,
-                settings.width,
-                settings.height
+        if (sample != samples - 1) return FrameSource.NO_FRAME
+        val delivered = collectPending(into, depthInto, settings)
+        val accumulation = accumulation ?: return delivered
+        val processed = postBuffer?.let { runLook(accumulation, it, settings) } == true
+        if (processed) postBuffer!!.issueReadback(currentSlot) else accumulation.issueReadback(currentSlot)
+        depthBuffer?.let {
+            runDepth(it, settings)
+            it.issueReadback(currentSlot)
+        }
+        pendingIndex = currentIndex
+        pendingSlot = currentSlot
+        pendingPost = processed
+        currentSlot = (currentSlot + 1) % AccumulationBuffer.READBACK_SLOTS
+        return delivered
+    }
+
+    private fun runLook(accumulation: AccumulationBuffer, target: AccumulationBuffer, settings: ExportSettings): Boolean {
+        val look = settings.look ?: return false
+        GL11.glPushAttrib(GL11.GL_VIEWPORT_BIT)
+        try {
+            target.bind()
+            GL11.glViewport(0, 0, target.width, target.height)
+            return post.drawLook(
+                accumulation.texture,
+                if (settings.depthOfField && depthCaptured) depthTexture.id else 0,
+                target.width,
+                target.height,
+                PostProcessor.Frame(
+                    look,
+                    frameFocus,
+                    PostProcessor.NEAR_PLANE,
+                    PostProcessor.farPlane(minecraft.options.viewDistance),
+                    settings.projection == ExportProjection.ORTHOGRAPHIC,
+                    (currentIndex % 4096L).toFloat(),
+                    PostProcessor.EXPORT_TAPS,
+                ),
             )
+        } finally {
+            GL11.glPopAttrib()
+        }
+    }
+
+    private fun runDepth(target: DepthMapBuffer, settings: ExportSettings) {
+        GL11.glPushAttrib(GL11.GL_VIEWPORT_BIT or GL11.GL_COLOR_BUFFER_BIT or GL11.GL_SCISSOR_BIT)
+        try {
+            target.bind()
+            GL11.glViewport(0, 0, target.width, target.height)
+            val drawn = depthCaptured && post.drawDepth(
+                depthTexture.id,
+                renderWidth,
+                renderHeight,
+                settings.supersampleFactor,
+                PostProcessor.NEAR_PLANE,
+                PostProcessor.farPlane(minecraft.options.viewDistance),
+                settings.projection == ExportProjection.ORTHOGRAPHIC,
+                settings.depthRange.toFloat(),
+            )
+            if (!drawn) {
+                GL11.glDisable(GL11.GL_SCISSOR_TEST)
+                GL11.glColorMask(true, true, true, true)
+                GL11.glClearColor(0f, 0f, 0f, 1f)
+                GL11.glClear(GL11.GL_COLOR_BUFFER_BIT)
+            }
+        } finally {
+            GL11.glPopAttrib()
+        }
+    }
+
+    override fun flush(into: ByteArray, depthInto: FloatArray?): Long {
+        val settings = this.settings ?: return FrameSource.NO_FRAME
+        return collectPending(into, depthInto, settings)
+    }
+
+    private fun collectPending(into: ByteArray, depthInto: FloatArray?, settings: ExportSettings): Long {
+        val index = pendingIndex
+        if (index == FrameSource.NO_FRAME) return FrameSource.NO_FRAME
+        val source = (if (pendingPost) postBuffer else accumulation) ?: return FrameSource.NO_FRAME
+        val staging = readbackStaging ?: return FrameSource.NO_FRAME
+        source.collectReadback(pendingSlot, staging, into)
+        if (!settings.transparent) forceOpaque(into, settings)
+        if (depthInto != null) {
+            val depth = depthBuffer
+            val depthStaging = depthStaging
+            if (depth != null && depthStaging != null) depth.collectReadback(pendingSlot, depthStaging, depthInto)
             else Arrays.fill(depthInto, 0f)
         }
+        pendingIndex = FrameSource.NO_FRAME
+        return index
+    }
+
+    override fun warnings(): List<String> {
+        val result = ArrayList<String>(4)
+        if (incompleteChunkFrames > 0) result += "$incompleteChunkFrames frames were captured while chunks were still compiling"
+        if (missingSkinPlayers.isNotEmpty()) result += "${missingSkinPlayers.size} players were rendered without their skin"
+        if (lookRequested) {
+            post.failure?.let { result += "The look was not applied: $it" }
+            post.lutWarning?.let { result += it }
+        }
+        return result
     }
 
     private fun composeEquirect(into: ByteArray, sample: Int, samples: Int) {
@@ -408,11 +541,15 @@ class FramebufferExporter(
 
     private fun captureGpu(pass: Int, settings: ExportSettings) {
         val target = exportTarget ?: return
-        val accum = accumTarget ?: return
-        val samples = settings.motionBlur.samples.coerceIn(1, 64)
+        val accum = accumulation ?: return
+        val samples = settings.motionBlur.sampleCount
         val viewport = passViewport(settings, pass)
 
-        accum.bindWrite(false)
+        if (accumPending) {
+            accumPending = false
+            accum.clear()
+        }
+        accum.bind()
         GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS)
         GL11.glMatrixMode(GL11.GL_PROJECTION)
         GL11.glPushMatrix()
@@ -421,13 +558,6 @@ class FramebufferExporter(
         GL11.glPushMatrix()
         GL11.glLoadIdentity()
         try {
-            if (accumPending) {
-                accumPending = false
-                GL11.glDisable(GL11.GL_SCISSOR_TEST)
-                GL11.glColorMask(true, true, true, true)
-                GL11.glClearColor(0f, 0f, 0f, 0f)
-                GL11.glClear(GL11.GL_COLOR_BUFFER_BIT)
-            }
             GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, target.colorTextureId)
             GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D)
@@ -461,22 +591,6 @@ class FramebufferExporter(
         }
     }
 
-    private fun readAccumulation(into: ByteArray, settings: ExportSettings) {
-        val accum = accumTarget ?: return
-        val buffer = finalReadback ?: return
-        val width = settings.width
-        val height = settings.height
-        accum.bindWrite(false)
-        buffer.clear()
-        GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1)
-        GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer)
-        val rowBytes = width * 4
-        for (row in 0 until height) {
-            buffer.position((height - 1 - row) * rowBytes)
-            buffer.get(into, row * rowBytes, rowBytes)
-        }
-    }
-
     private fun forceOpaque(into: ByteArray, settings: ExportSettings) {
         val rows = if (settings.projection == ExportProjection.CUBE_MAP)
             minOf(2 * (settings.width / 3), settings.height) else settings.height
@@ -485,27 +599,6 @@ class FramebufferExporter(
         while (index < end) {
             into[index] = 0xFF.toByte()
             index += 4
-        }
-    }
-
-    private fun downsampleDepth(
-        source: FloatArray,
-        sourceWidth: Int,
-        factor: Int,
-        target: FloatArray,
-        targetWidth: Int,
-        targetHeight: Int
-    ) {
-        val samples = factor * factor
-        for (y in 0 until targetHeight) {
-            for (x in 0 until targetWidth) {
-                var sum = 0f
-                for (dy in 0 until factor) {
-                    val row = (y * factor + dy) * sourceWidth + x * factor
-                    for (dx in 0 until factor) sum += source[row + dx]
-                }
-                target[y * targetWidth + x] = sum / samples
-            }
         }
     }
 
@@ -523,14 +616,23 @@ class FramebufferExporter(
         endRender()
         exportTarget?.destroyBuffers()
         exportTarget = null
-        accumTarget?.destroyBuffers()
-        accumTarget = null
+        accumulation?.destroy()
+        accumulation = null
+        postBuffer?.destroy()
+        postBuffer = null
+        depthBuffer?.destroy()
+        depthBuffer = null
+        depthStaging = null
+        depthTexture.destroy()
+        depthWanted = false
+        depthCaptured = false
         accumPending = false
-        finalReadback = null
+        readbackStaging = null
+        currentIndex = FrameSource.NO_FRAME
+        pendingIndex = FrameSource.NO_FRAME
+        pendingPost = false
         readback = null
-        depthReadback = null
         passBuffers = emptyArray()
-        passDepth = null
         equirectAccumulator = null
         equirectScratch = null
         lut = null
@@ -554,10 +656,13 @@ class FramebufferExporter(
         if (started != null) return
         val request = pending.get() ?: return
         started = request
+        val framebuffer = GL11.glGetInteger(GL30.GL_FRAMEBUFFER_BINDING)
         try {
             request.result = request.action()
         } catch (error: Throwable) {
             request.failure = error
+        } finally {
+            GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer)
         }
         if (request.capturePass < 0) finish(request)
     }
@@ -580,10 +685,13 @@ class FramebufferExporter(
         val request = started ?: return
         val pass = request.capturePass
         if (pass >= 0) {
-            if (settings?.waitForChunks == true && !chunks.settled() && chunkWaitFrames < MAX_CHUNK_WAIT_FRAMES) {
-                chunkWaitFrames++
-                chunkWaitStatus = "waiting for chunks: " + chunks.pendingDescription()
-                return
+            if (settings?.waitForChunks == true && !chunks.settled()) {
+                if (chunkWaitFrames < MAX_CHUNK_WAIT_FRAMES) {
+                    chunkWaitFrames++
+                    chunkWaitStatus = "waiting for chunks: " + chunks.pendingDescription()
+                    return
+                }
+                incompleteChunkFrames++
             }
             if (settings?.waitForChunks == true && !skinsReady()) {
                 chunkWaitStatus = "waiting for player skins"
@@ -628,6 +736,7 @@ class FramebufferExporter(
         }
         if (skinWaitFrames >= MAX_SKIN_WAIT_FRAMES) {
             skinGiveUp.addAll(missing)
+            missingSkinPlayers.addAll(missing)
             skinWaitFrames = 0
             return true
         }
@@ -664,29 +773,14 @@ class FramebufferExporter(
     }
 
     fun captureDepth() {
-        if (!exporting || !frameActive) return
+        if (!exporting || !frameActive || !depthWanted) return
         val request = started ?: return
         if (request.capturePass != 0) return
-        val depth = passDepth ?: return
-        val depthBuffer = depthReadback ?: return
-        val width = renderWidth
-        val height = renderHeight
-        exportTarget?.bindWrite(false)
-        depthBuffer.clear()
-        GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1)
-        GL11.glReadPixels(0, 0, width, height, GL11.GL_DEPTH_COMPONENT, GL11.GL_FLOAT, depthBuffer)
-        val near = NEAR_PLANE
-        val far = minecraft.options.viewDistance * 16f * SQRT_2
-        for (row in 0 until height) {
-            val sourceRow = (height - 1 - row) * width
-            val targetRow = row * width
-            for (x in 0 until width) {
-                val z = depthBuffer.get(sourceRow + x)
-                val ndc = z * 2f - 1f
-                val linear = 2f * near * far / (far + near - ndc * (far - near))
-                depth[targetRow + x] = (linear / far).coerceIn(0f, 1f)
-            }
-        }
+        val settings = this.settings ?: return
+        if (sampleIndex != settings.motionBlur.sampleCount / 2) return
+        val target = exportTarget ?: return
+        target.bindWrite(false)
+        depthCaptured = depthTexture.copyFromReadFramebuffer(0, 0, renderWidth, renderHeight)
     }
 
     private fun capture(pass: Int) {
@@ -720,7 +814,5 @@ class FramebufferExporter(
         const val CHUNK_BUDGET_NANOS = 250_000_000L
         const val REQUEST_WAIT_NANOS = 8_000_000L
         const val EQUIRECT_FOV = 92f
-        const val NEAR_PLANE = 0.05f
-        const val SQRT_2 = 1.4142135f
     }
 }
