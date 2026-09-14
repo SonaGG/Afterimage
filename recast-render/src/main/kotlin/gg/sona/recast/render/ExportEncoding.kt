@@ -1,5 +1,6 @@
 package gg.sona.recast.render
 
+import gg.sona.recast.render.ffmpeg.VideoColor
 import java.util.*
 
 object ExportEncoding {
@@ -18,11 +19,17 @@ object ExportEncoding {
     fun requestedPixelFormat(settings: ExportSettings): String =
         if (settings.format == ExportFormat.MOV_PRORES) "yuv422p10le" else settings.pixelFormat
 
+    fun videoColor(settings: ExportSettings): VideoColor? =
+        if (settings.format == ExportFormat.GIF) null else VideoColor.BT709_LIMITED
+
     fun videoFilters(settings: ExportSettings, outputPixelFormat: String?): String {
         val filters = fadeFilters(settings).toMutableList()
         if (settings.format == ExportFormat.GIF) {
             filters += "split[s0][s1];[s0]palettegen=max_colors=${settings.gifColors.coerceIn(2, 256)}:stats_mode=diff[p];[s1][p]paletteuse=dither=${settings.gifDither}"
         } else if (outputPixelFormat != null) {
+            videoColor(settings)?.let {
+                filters += "scale=in_range=pc:out_range=${it.filterRange}:out_color_matrix=${it.filterMatrix}"
+            }
             filters += "format=$outputPixelFormat"
         }
         return if (filters.isEmpty()) "null" else filters.joinToString(",")

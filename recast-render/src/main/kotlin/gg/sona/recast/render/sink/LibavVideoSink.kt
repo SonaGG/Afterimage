@@ -35,6 +35,7 @@ class LibavVideoSink(private val encoders: Set<String> = emptySet()) : FrameSink
         val requested = avutil.av_get_pix_fmt(ExportEncoding.requestedPixelFormat(settings))
         val pixelFormat = VideoEncoder.choosePixelFormat(codec, requested)
         val pixelFormatName = avutil.av_get_pix_fmt_name(pixelFormat).string
+        val color = ExportEncoding.videoColor(settings)
         try {
             val output = MediaOutput(settings.output).also { output = it }
             val filters = VideoFilterGraph(
@@ -43,7 +44,7 @@ class LibavVideoSink(private val encoders: Set<String> = emptySet()) : FrameSink
             ).also { filters = it }
             val encoder = VideoEncoder(
                 codecName, width, height, settings.fps, filters.outputFormat,
-                ExportEncoding.codecOptions(settings, codecName), output.globalHeader
+                ExportEncoding.codecOptions(settings, codecName), output.globalHeader, color
             ).also { encoder = it }
             val stream = output.addStream().also { stream = it }
             Libav.check(avcodec.avcodec_parameters_from_context(stream.codecpar(), encoder.context), "stream parameters")
@@ -54,6 +55,7 @@ class LibavVideoSink(private val encoders: Set<String> = emptySet()) : FrameSink
                 it.format(avutil.AV_PIX_FMT_RGBA)
                 it.width(width)
                 it.height(height)
+                color?.tagRgbSource(it)
                 Libav.check(avutil.av_frame_get_buffer(it, 0), "frame buffer")
             }
             filtered = avutil.av_frame_alloc()

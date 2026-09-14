@@ -19,6 +19,7 @@ class VideoEncoder(
     pixelFormat: Int,
     options: Map<String, String> = emptyMap(),
     globalHeader: Boolean = false,
+    color: VideoColor? = null,
 ) : AutoCloseable {
     val codec: AVCodec = avcodec.avcodec_find_encoder_by_name(codecName)
         ?: throw IllegalStateException("encoder $codecName is not available")
@@ -31,6 +32,7 @@ class VideoEncoder(
         context.time_base(avutil.av_make_q(1, fps))
         context.framerate(avutil.av_make_q(fps, 1))
         context.pix_fmt(pixelFormat)
+        color?.apply(context)
         context.thread_count(0)
         if (globalHeader) context.flags(context.flags() or avcodec.AV_CODEC_FLAG_GLOBAL_HEADER)
         val dictionary = AVDictionary(null)

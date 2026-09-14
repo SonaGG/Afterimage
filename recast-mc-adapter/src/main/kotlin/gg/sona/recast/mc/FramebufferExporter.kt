@@ -77,6 +77,7 @@ class FramebufferExporter(
     private var lut: EquirectLut? = null
 
     private var accumTarget: RenderTarget? = null
+    private var accumPending = false
     private var finalReadback: ByteBuffer? = null
     private var equirectAccumulator: IntArray? = null
     private var equirectScratch: ByteArray? = null
@@ -310,13 +311,7 @@ class FramebufferExporter(
         sounds.outputNanos = outputNanos
         if (index == 0L) sounds.capturing = false
         equirectAccumulator?.let { Arrays.fill(it, 0) }
-        accumTarget?.let {
-            it.bindWrite(false)
-            GL11.glPushAttrib(GL11.GL_COLOR_BUFFER_BIT)
-            GL11.glClearColor(0f, 0f, 0f, 0f)
-            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT)
-            GL11.glPopAttrib()
-        }
+        accumPending = accumTarget != null
     }
 
     override fun renderPass(nanos: Long, pose: CameraPose, pass: Int) {
@@ -426,6 +421,13 @@ class FramebufferExporter(
         GL11.glPushMatrix()
         GL11.glLoadIdentity()
         try {
+            if (accumPending) {
+                accumPending = false
+                GL11.glDisable(GL11.GL_SCISSOR_TEST)
+                GL11.glColorMask(true, true, true, true)
+                GL11.glClearColor(0f, 0f, 0f, 0f)
+                GL11.glClear(GL11.GL_COLOR_BUFFER_BIT)
+            }
             GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
             GL11.glBindTexture(GL11.GL_TEXTURE_2D, target.colorTextureId)
             GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D)
@@ -523,6 +525,7 @@ class FramebufferExporter(
         exportTarget = null
         accumTarget?.destroyBuffers()
         accumTarget = null
+        accumPending = false
         finalReadback = null
         readback = null
         depthReadback = null
