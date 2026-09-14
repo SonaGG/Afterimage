@@ -27,16 +27,16 @@ class LibraryScreen(private val context: EditorContext) {
         val info: RecordingInfo?
     ) {
         val title: String get() = info?.title?.takeIf { it.isNotBlank() } ?: name.substringBeforeLast('.')
+        val server: String get() = info?.server?.takeIf { it.isNotBlank() } ?: ""
+        val player: String get() = info?.player?.takeIf { it.isNotBlank() } ?: ""
         val subtitle: String
-            get() = listOfNotNull(
-                info?.server?.takeIf { it.isNotBlank() },
-                info?.player?.takeIf { it.isNotBlank() }?.let { "as $it" }).joinToString("    ")
+            get() = listOf(server, player.takeIf { it.isNotEmpty() }?.let { "as $it" } ?: "").filter { it.isNotEmpty() }
+                .joinToString("    ")
+        val duration: String get() = info?.let { TimeFormat.clock(it.durationNanos).substringBefore('.') } ?: ""
     }
 
     private enum class Sort(val label: String) {
-        NEWEST("Newest"), OLDEST("Oldest"), NAME("Name"), LONGEST("Longest"), SIZE(
-            "Largest"
-        )
+        NEWEST("Newest"), OLDEST("Oldest"), NAME("Name"), LONGEST("Longest"), SIZE("Largest")
     }
 
     private val filter = ImString("", 64)
@@ -55,6 +55,8 @@ class LibraryScreen(private val context: EditorContext) {
     private var confirmDeleteProject: Path? = null
     private val marked = LinkedHashSet<Path>()
     private var confirmDeleteMany = false
+    private var visibleCount = 0
+    private var visibleNanos = 0L
 
     fun draw(frame: FrameContext, bottomInset: Float = 0f) {
         if (frame.nowNanos - lastRefreshNanos > REFRESH_NANOS) {
@@ -68,136 +70,193 @@ class LibraryScreen(private val context: EditorContext) {
             ImGuiWindowFlags.NoDecoration or ImGuiWindowFlags.NoDocking or ImGuiWindowFlags.NoSavedSettings or ImGuiWindowFlags.NoBringToFrontOnFocus or ImGuiWindowFlags.NoMove
         ImGui.pushStyleColor(ImGuiCol.WindowBg, EditorTheme.APP_BG.u32)
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, 0f, 0f)
-        if (ImGui.begin("##library", flags)) {
+        val open = ImGui.begin("##library", flags)
+        ImGui.popStyleVar()
+        if (open) {
             sidebar()
             ImGui.sameLine(0f, 0f)
             content(frame)
         }
         ImGui.end()
-        ImGui.popStyleVar()
         ImGui.popStyleColor()
         deleteDialog()
         deleteManyDialog()
         deleteProjectDialog()
     }
 
+    private fun flush(id: String, width: Float, height: Float, flags: Int = 0): Boolean {
+        ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, 0f, 0f)
+        val open = ImGui.beginChild(id, width, height, false, flags)
+        ImGui.popStyleVar()
+        return open
+    }
+
     private fun sidebar() {
         val width = SIDEBAR_WIDTH
-        ImGui.pushStyleColor(ImGuiCol.ChildBg, EditorTheme.PANEL.u32)
-        ImGui.beginChild("##library-sidebar", width, 0f, false, ImGuiWindowFlags.NoScrollbar)
+        ImGui.pushStyleColor(ImGuiCol.ChildBg, EditorTheme.PANEL_SUNKEN.u32)
+        flush("##library-sidebar", width, 0f, ImGuiWindowFlags.NoScrollbar)
         ImGui.popStyleColor()
         val list = ImGui.getWindowDrawList()
         val x = ImGui.getWindowPosX()
         val y = ImGui.getWindowPosY()
-        list.addLine(x + width - 1f, y, x + width - 1f, y + ImGui.getWindowHeight(), EditorTheme.SEPARATOR.u32, 1f)
-        ImGui.setCursorPos(EditorFonts.px(18f), EditorFonts.px(20f))
-        EditorFonts.with(EditorFonts.title) { ImGui.textUnformatted("Recast") }
-        ImGui.dummy(0f, EditorFonts.px(12f))
+        val height = ImGui.getWindowHeight()
+        list.addLine(x + width - 1f, y, x + width - 1f, y + height, EditorTheme.SEPARATOR.u32, 1f)
+        ImGui.setCursorPos(EditorFonts.px(16f), EditorFonts.px(14f))
+        EditorFonts.with(EditorFonts.heading) { ImGui.textUnformatted("Recast") }
+        ImGui.setCursorPos(EditorFonts.px(16f), EditorFonts.px(46f))
+        EditorFonts.with(EditorFonts.label) {
+            ImGui.pushStyleColor(ImGuiCol.Text, EditorTheme.TEXT_DIM.u32)
+            ImGui.textUnformatted("LIBRARY")
+            ImGui.popStyleColor()
+        }
+        ImGui.setCursorPosY(EditorFonts.px(64f))
         sidebarItem("Recordings", Icon.FILM, 0, "${cards.size}")
         sidebarItem("Projects", Icon.FOLDER, 1, "${projectSummaries.size}")
-        val status = context.host.recording.status()
-        ImGui.setCursorPos(EditorFonts.px(14f), ImGui.getWindowHeight() - EditorFonts.px(88f))
-        ImGui.beginGroup()
-        when {
-            status.recording -> {
-                Widgets.pill("REC ${TimeFormat.clock(status.elapsedNanos).substringBefore('.')}", EditorTheme.RECORD)
-                if (Widgets.dangerButton("Stop recording", width - EditorFonts.px(28f))) context.host.recording.stop()
-            }
-
-            status.connected -> {
-                Widgets.pill("Connected", EditorTheme.SUCCESS)
-                if (Widgets.accentButton("Start recording", width - EditorFonts.px(28f))) context.host.recording.start()
-            }
-
-            else -> Widgets.smallText("Join a world to record", EditorTheme.TEXT_DIM.u32)
-        }
-        ImGui.endGroup()
+        recordingStatus(x, y + height, width)
         ImGui.endChild()
     }
 
     private fun sidebarItem(label: String, icon: Icon, index: Int, trailing: String) {
-        ImGui.setCursorPosX(EditorFonts.px(10f))
+        val rowHeight = EditorFonts.px(26f)
+        ImGui.setCursorPosX(EditorFonts.px(8f))
         val active = tab == index
-        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, 0f, EditorFonts.px(2f))
-        val pressed = Widgets.row("side$index", EditorFonts.px(28f), active) { x, y, width, hovered ->
-            val list = ImGui.getWindowDrawList()
-            val iconSize = EditorFonts.px(15f)
-            Icons.draw(
-                list,
-                icon,
-                x + EditorFonts.px(10f),
-                y + (EditorFonts.px(28f) - iconSize) / 2f,
-                iconSize,
-                if (active) EditorTheme.ACCENT_TEXT.u32 else EditorTheme.TEXT_MUTED.u32
-            )
-            val font = if (active) EditorFonts.bodyMedium else EditorFonts.body
+        val x = ImGui.getCursorScreenPosX()
+        val y = ImGui.getCursorScreenPosY()
+        val width = SIDEBAR_WIDTH - EditorFonts.px(16f)
+        val pressed = ImGui.invisibleButton("side$index", width, rowHeight)
+        val hovered = ImGui.isItemHovered()
+        val list = ImGui.getWindowDrawList()
+        if (active) list.addRectFilled(x, y, x + width, y + rowHeight, EditorTheme.SELECTION_FILL.u32, EditorFonts.px(5f))
+        else if (hovered) list.addRectFilled(x, y, x + width, y + rowHeight, EditorTheme.TEXT.u32(0.05f), EditorFonts.px(5f))
+        val iconSize = EditorFonts.px(14f)
+        Icons.draw(
+            list,
+            icon,
+            x + EditorFonts.px(10f),
+            y + (rowHeight - iconSize) / 2f,
+            iconSize,
+            if (active) EditorTheme.TEXT.u32 else EditorTheme.TEXT_MUTED.u32
+        )
+        val font = if (active) EditorFonts.bodyMedium else EditorFonts.body
+        list.addText(
+            font,
+            ImGui.getFontSize(),
+            x + EditorFonts.px(32f),
+            y + (rowHeight - ImGui.getFontSize()) / 2f,
+            EditorTheme.TEXT.u32,
+            label
+        )
+        EditorFonts.with(EditorFonts.small) {
+            val trailingWidth = Widgets.textWidth(trailing)
             list.addText(
-                font,
-                ImGui.getFontSize(),
-                x + EditorFonts.px(32f),
-                y + (EditorFonts.px(28f) - ImGui.getFontSize()) / 2f,
-                EditorTheme.TEXT.u32,
-                label
+                x + width - trailingWidth - EditorFonts.px(10f),
+                y + (rowHeight - ImGui.getFontSize()) / 2f,
+                EditorTheme.TEXT_DIM.u32,
+                trailing
             )
-            EditorFonts.with(EditorFonts.small) {
-                val trailingWidth = Widgets.textWidth(trailing)
-                list.addText(
-                    x + width - trailingWidth - EditorFonts.px(12f),
-                    y + (EditorFonts.px(28f) - ImGui.getFontSize()) / 2f,
-                    EditorTheme.TEXT_DIM.u32,
-                    trailing
-                )
-            }
         }
-        ImGui.popStyleVar()
+        ImGui.setCursorScreenPos(x, y + rowHeight + EditorFonts.px(2f))
         if (pressed) {
             tab = index
             marked.clear()
+            selected = null
         }
     }
 
+    private fun recordingStatus(x: Float, bottom: Float, width: Float) {
+        val status = context.host.recording.status()
+        val inset = EditorFonts.px(12f)
+        val list = ImGui.getWindowDrawList()
+        list.addLine(x, bottom - STATUS_HEIGHT, x + width - 1f, bottom - STATUS_HEIGHT, EditorTheme.SEPARATOR.u32, 1f)
+        ImGui.setCursorScreenPos(x + inset, bottom - STATUS_HEIGHT + EditorFonts.px(12f))
+        ImGui.beginGroup()
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(6f), EditorFonts.px(8f))
+        when {
+            status.recording -> {
+                val cy = ImGui.getCursorScreenPosY() + ImGui.getTextLineHeight() / 2f
+                list.addCircleFilled(ImGui.getCursorScreenPosX() + EditorFonts.px(5f), cy, EditorFonts.px(4.5f), EditorTheme.RECORD.u32, 16)
+                ImGui.dummy(EditorFonts.px(14f), ImGui.getTextLineHeight())
+                ImGui.sameLine()
+                EditorFonts.with(EditorFonts.smallMedium) {
+                    ImGui.textUnformatted("Recording  ${TimeFormat.clock(status.elapsedNanos).substringBefore('.')}")
+                }
+                if (Widgets.button("Stop recording", width - inset * 2f)) context.host.recording.stop()
+            }
+
+            status.connected -> {
+                Widgets.smallText("Connected to a world", EditorTheme.TEXT_MUTED.u32)
+                if (Widgets.accentButton("Start recording", width - inset * 2f)) context.host.recording.start()
+            }
+
+            else -> Widgets.smallText("Join a world to record", EditorTheme.TEXT_DIM.u32)
+        }
+        ImGui.popStyleVar()
+        ImGui.endGroup()
+    }
+
     private fun content(frame: FrameContext) {
-        ImGui.beginChild("##library-content", 0f, 0f, false, ImGuiWindowFlags.NoScrollbar)
-        val padding = EditorFonts.px(28f)
-        ImGui.setCursorPos(padding, EditorFonts.px(22f))
-        EditorFonts.with(EditorFonts.title) { ImGui.textUnformatted(if (tab == 0) "Recordings" else "Projects") }
-        val searchWidth = EditorFonts.px(260f)
-        ImGui.sameLine(
-            ImGui.getWindowWidth() - padding - searchWidth - (if (tab == 0) EditorFonts.px(180f) else EditorFonts.px(
-                40f
-            ))
-        )
-        ImGui.setCursorPosY(EditorFonts.px(24f))
-        Widgets.search(
-            "##library-search",
-            filter,
-            if (tab == 0) "Search recordings" else "Search projects",
-            searchWidth
-        )
+        flush("##library-content", 0f, 0f, ImGuiWindowFlags.NoScrollbar)
+        val list = ImGui.getWindowDrawList()
+        val x = ImGui.getWindowPosX()
+        val y = ImGui.getWindowPosY()
+        val width = ImGui.getWindowWidth()
+        val height = ImGui.getWindowHeight()
+        list.addRectFilled(x, y, x + width, y + BAR_HEIGHT, EditorTheme.PANEL.u32)
+        list.addLine(x, y + BAR_HEIGHT, x + width, y + BAR_HEIGHT, EditorTheme.SEPARATOR.u32, 1f)
+        list.addRectFilled(x, y + height - FOOTER_HEIGHT, x + width, y + height, EditorTheme.PANEL.u32)
+        list.addLine(x, y + height - FOOTER_HEIGHT, x + width, y + height - FOOTER_HEIGHT, EditorTheme.SEPARATOR.u32, 1f)
+        browserBar(width)
+        val padding = EditorFonts.px(16f)
+        ImGui.setCursorPos(0f, BAR_HEIGHT + 1f)
+        val noticeHeight = notices(padding)
+        ImGui.setCursorPos(padding, BAR_HEIGHT + 1f + noticeHeight + EditorFonts.px(12f))
+        val bodyHeight = height - BAR_HEIGHT - FOOTER_HEIGHT - noticeHeight - EditorFonts.px(12f) - 1f
+        if (tab == 1) projects(width - padding * 2f, bodyHeight) else recordings(width - padding * 2f, bodyHeight)
+        footer(x, y + height - FOOTER_HEIGHT, width)
+        ImGui.endChild()
+    }
+
+    private fun browserBar(width: Float) {
+        val inset = EditorFonts.px(12f)
+        val control = EditorFonts.px(22f)
+        val frame = ImGui.getFrameHeight()
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(8f), 0f)
+        ImGui.setCursorPos(inset, (BAR_HEIGHT - control - EditorFonts.px(4f)) / 2f)
+        Widgets.segmentedIcons(
+            "lib-view",
+            listOf(Icon.GRID, Icon.LIST),
+            if (context.ui.libraryList) 1 else 0,
+            listOf("Filmstrip", "List"),
+            control
+        )?.let { context.ui.libraryList = it == 1 }
         if (tab == 0) {
-            ImGui.sameLine(0f, EditorFonts.px(8f))
+            ImGui.sameLine()
+            ImGui.setCursorPosY((BAR_HEIGHT - frame) / 2f)
             sortPopup()
         }
-        ImGui.sameLine(0f, EditorFonts.px(8f))
-        if (Widgets.iconButton("lib-refresh", Icon.REFRESH, ImGui.getFrameHeight(), "Refresh")) {
+        val searchWidth = EditorFonts.px(220f)
+        val buttons = EditorFonts.px(24f)
+        ImGui.sameLine(width - inset - searchWidth - (buttons + EditorFonts.px(8f)) * 2f)
+        ImGui.setCursorPosY((BAR_HEIGHT - frame) / 2f)
+        Widgets.search("##library-search", filter, if (tab == 0) "Search recordings" else "Search projects", searchWidth)
+        ImGui.sameLine()
+        ImGui.setCursorPosY((BAR_HEIGHT - buttons) / 2f)
+        if (Widgets.iconButton("lib-refresh", Icon.REFRESH, buttons, "Refresh")) {
             lastRefreshNanos = 0L
             lastProjectsRefreshNanos = 0L
         }
-        ImGui.sameLine(0f, EditorFonts.px(4f))
-        if (Widgets.iconButton("lib-folder", Icon.FOLDER, ImGui.getFrameHeight(), "Show in Finder or Explorer")) {
-            if (tab == 0) cards.firstOrNull()
-                ?.let { openFolder(it.path) } else openFolder(context.host.projectsDirectory)
+        ImGui.sameLine()
+        ImGui.setCursorPosY((BAR_HEIGHT - buttons) / 2f)
+        if (Widgets.iconButton("lib-folder", Icon.FOLDER, buttons, "Show in Finder or Explorer")) {
+            if (tab == 0) cards.firstOrNull()?.let { openFolder(it.path) } else openFolder(context.host.projectsDirectory)
         }
-        ImGui.dummy(0f, EditorFonts.px(6f))
-        notices(padding)
-        if (tab == 1) projectsGrid(padding) else recordingsGrid(padding)
-        ImGui.endChild()
+        ImGui.popStyleVar()
     }
 
     private fun sortPopup() {
         val label = sort.label
-        val width = EditorFonts.px(96f)
         val height = ImGui.getFrameHeight()
+        val width = EditorFonts.with(EditorFonts.small) { Widgets.textWidth(label) } + EditorFonts.px(34f)
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
         val pressed = ImGui.invisibleButton("lib-sort", width, height)
@@ -211,7 +270,9 @@ class LibraryScreen(private val context: EditorContext) {
             if (hovered) EditorTheme.CONTROL_HOVER.u32 else EditorTheme.CONTROL.u32,
             EditorFonts.px(5f)
         )
-        list.addText(x + EditorFonts.px(9f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, label)
+        EditorFonts.with(EditorFonts.small) {
+            list.addText(x + EditorFonts.px(9f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, label)
+        }
         Icons.draw(
             list,
             Icon.CHEVRON_DOWN,
@@ -220,20 +281,27 @@ class LibraryScreen(private val context: EditorContext) {
             EditorFonts.px(9f),
             EditorTheme.TEXT_DIM.u32
         )
+        if (hovered) Widgets.hint("Sort order")
         if (pressed) ImGui.openPopup("lib-sort-menu")
-        if (ImGui.beginPopup("lib-sort-menu")) {
+        if (Widgets.beginPopup("lib-sort-menu")) {
             for (option in Sort.entries) if (ImGui.menuItem(option.label, "", sort == option)) sort = option
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
     }
 
-    private fun notices(padding: Float) {
+    private fun notices(padding: Float): Float {
+        val start = ImGui.getCursorPosY()
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(8f), EditorFonts.px(4f))
         context.host.replay.lastError()?.let {
             ImGui.setCursorPosX(padding)
-            Widgets.smallText(it, EditorTheme.WARNING.u32)
+            ImGui.dummy(0f, EditorFonts.px(8f))
+            ImGui.setCursorPosX(padding)
+            Widgets.iconText(Icon.WARNING, it, EditorTheme.WARNING.u32)
         }
         context.exports?.queue()?.handles()
             ?.filter { it.state == ExportState.RUNNING || it.state == ExportState.QUEUED }?.forEach { handle ->
+                ImGui.setCursorPosX(padding)
+                ImGui.dummy(0f, EditorFonts.px(6f))
                 ImGui.setCursorPosX(padding)
                 ImGui.alignTextToFramePadding()
                 Widgets.smallText(handle.job.name, EditorTheme.TEXT_MUTED.u32)
@@ -248,42 +316,83 @@ class LibraryScreen(private val context: EditorContext) {
             }
         if (context.host.replay.sequenceBuilding()) {
             ImGui.setCursorPosX(padding)
-            Widgets.pill("Building sequence", EditorTheme.ACCENT)
+            ImGui.dummy(0f, EditorFonts.px(6f))
+            ImGui.setCursorPosX(padding)
+            Widgets.pill("Building sequence", EditorTheme.ACCENT, EditorTheme.ACCENT_TEXT.u32)
         }
+        ImGui.popStyleVar()
+        return ImGui.getCursorPosY() - start
     }
 
-    private fun recordingsGrid(padding: Float) {
+    private fun footer(x: Float, y: Float, width: Float) {
+        val inset = EditorFonts.px(12f)
+        val list = ImGui.getWindowDrawList()
+        val frame = ImGui.getFrameHeight()
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(8f), 0f)
+        if (tab == 0 && marked.size >= 2) {
+            ImGui.setCursorScreenPos(x + inset, y + (FOOTER_HEIGHT - frame) / 2f)
+            ImGui.alignTextToFramePadding()
+            EditorFonts.with(EditorFonts.smallMedium) { ImGui.textUnformatted("${marked.size} selected") }
+            ImGui.sameLine(0f, EditorFonts.px(14f))
+            if (Widgets.accentButton("New project from selection")) newProject(marked.toList())
+            Widgets.tooltip("Plays the selected recordings back to back in the order you picked them")
+            ImGui.sameLine()
+            if (Widgets.dangerButton("Delete")) confirmDeleteMany = true
+            ImGui.sameLine()
+            if (Widgets.ghostButton("Clear")) marked.clear()
+        } else {
+            val summary = if (tab == 0) {
+                val total = if (visibleNanos > 0L) "    " + TimeFormat.clock(visibleNanos).substringBefore('.') + " total" else ""
+                "$visibleCount ${if (visibleCount == 1) "recording" else "recordings"}$total"
+            } else "$visibleCount ${if (visibleCount == 1) "project" else "projects"}"
+            EditorFonts.with(EditorFonts.small) {
+                list.addText(
+                    x + inset,
+                    y + (FOOTER_HEIGHT - ImGui.getFontSize()) / 2f,
+                    EditorTheme.TEXT_MUTED.u32,
+                    summary
+                )
+            }
+        }
+        if (!context.ui.libraryList) {
+            val sliderWidth = EditorFonts.px(110f)
+            val icon = EditorFonts.px(12f)
+            val right = x + width - inset
+            val cy = y + FOOTER_HEIGHT / 2f
+            Icons.draw(list, Icon.GRID, right - sliderWidth - icon * 2f - EditorFonts.px(14f), cy - icon / 2f, icon, EditorTheme.TEXT_DIM.u32)
+            ImGui.setCursorScreenPos(right - sliderWidth - icon - EditorFonts.px(6f), y + (FOOTER_HEIGHT - frame) / 2f)
+            Widgets.slider(
+                "##lib-thumb",
+                context.ui.libraryThumbSize,
+                THUMB_MIN,
+                THUMB_MAX,
+                width = sliderWidth,
+                labelOf = { "" })?.let { context.ui.libraryThumbSize = it }
+            if (ImGui.isItemHovered()) Widgets.hint("Clip size")
+            Icons.draw(list, Icon.FULLSCREEN, right - icon, cy - icon / 2f, icon, EditorTheme.TEXT_DIM.u32)
+        }
+        ImGui.popStyleVar()
+    }
+
+    private fun recordings(width: Float, height: Float) {
         val query = filter.get().trim().lowercase()
         val visible = cards.filter {
             query.isEmpty() || it.title.lowercase().contains(query) || it.name.lowercase()
                 .contains(query) || it.subtitle.lowercase().contains(query)
         }.sortedWith(comparator())
-        ImGui.setCursorPosX(padding)
-        val available = ImGui.getContentRegionAvailX() - padding
-        val reserved = if (marked.size >= 2) EditorFonts.px(64f) else EditorFonts.px(12f)
-        ImGui.beginChild("##grid", available, ImGui.getContentRegionAvailY() - reserved, false)
+        visibleCount = visible.size
+        visibleNanos = visible.sumOf { it.info?.durationNanos ?: 0L }
+        flush("##grid", width, height)
         if (visible.isEmpty()) {
             Widgets.emptyState(
                 if (cards.isEmpty()) "No recordings yet" else "Nothing matches",
                 if (cards.isEmpty()) "Join a world and start recording, or turn on auto record in Settings" else "Try a different search",
                 Icon.FILM
             )
+        } else if (context.ui.libraryList) {
+            recordingsList(visible)
         } else {
-            val columns = maxOf(1, ((available + GAP) / (CARD_WIDTH + GAP)).toInt())
-            val cardWidth = (available - GAP * (columns - 1)) / columns
-            val cardHeight = cardWidth * 9f / 16f + EditorFonts.px(58f)
-            val startX = ImGui.getCursorPosX()
-            val startY = ImGui.getCursorPosY()
-            for ((index, card) in visible.withIndex()) {
-                ImGui.setCursorPos(
-                    startX + (index % columns) * (cardWidth + GAP),
-                    startY + (index / columns) * (cardHeight + GAP)
-                )
-                drawCard(card, cardWidth, cardHeight)
-            }
-            val rows = (visible.size + columns - 1) / columns
-            ImGui.setCursorPos(startX, startY + rows * (cardHeight + GAP))
-            ImGui.dummy(1f, 1f)
+            recordingsGrid(visible, width)
         }
         ImGui.endChild()
         if (!ImGui.getIO().wantTextInput && renaming == null) {
@@ -292,27 +401,157 @@ class LibraryScreen(private val context: EditorContext) {
             if (current != null && ImGui.isKeyPressed(ImGuiKey.Delete, false)) if (marked.size >= 2) confirmDeleteMany =
                 true else confirmDelete = current
         }
-        if (marked.size >= 2) selectionBar(padding)
     }
 
-    private fun selectionBar(padding: Float) {
-        ImGui.setCursorPosX(padding)
+    private fun recordingsGrid(visible: List<Card>, available: Float) {
+        val target = context.ui.libraryThumbSize
+        val gap = GAP
+        val columns = maxOf(1, ((available + gap) / (target + gap)).toInt())
+        val cardWidth = (available - gap * (columns - 1)) / columns
+        val cardHeight = cardWidth * 9f / 16f + EditorFonts.px(44f)
+        val startX = ImGui.getCursorPosX()
+        val startY = ImGui.getCursorPosY()
+        for ((index, card) in visible.withIndex()) {
+            ImGui.setCursorPos(startX + (index % columns) * (cardWidth + gap), startY + (index / columns) * (cardHeight + gap))
+            drawCard(card, cardWidth, cardHeight)
+        }
+        val rows = (visible.size + columns - 1) / columns
+        ImGui.setCursorPos(startX, startY + rows * (cardHeight + gap))
+        ImGui.dummy(1f, 1f)
+    }
+
+    private fun recordingsList(visible: List<Card>) {
+        val flags =
+            ImGuiTableFlags.RowBg or ImGuiTableFlags.ScrollY
+        ImGui.pushStyleVar(ImGuiStyleVar.CellPadding, EditorFonts.px(8f), EditorFonts.px(4f))
+        ImGui.pushStyleColor(ImGuiCol.HeaderHovered, EditorTheme.TEXT.u32(0.05f))
+        ImGui.pushStyleColor(ImGuiCol.HeaderActive, EditorTheme.SELECTION_FILL.u32)
+        ImGui.pushStyleColor(ImGuiCol.Header, EditorTheme.SELECTION_FILL.u32)
+        val open = EditorFonts.with(EditorFonts.small) { ImGui.beginTable("lib-list", 6, flags) }
+        if (open) {
+            EditorFonts.with(EditorFonts.small) {
+                ImGui.tableSetupScrollFreeze(0, 1)
+                ImGui.tableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 3f)
+                ImGui.tableSetupColumn("Recorded", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(140f))
+                ImGui.tableSetupColumn("Duration", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(76f))
+                ImGui.tableSetupColumn("Server", ImGuiTableColumnFlags.WidthStretch, 2f)
+                ImGui.tableSetupColumn("Player", ImGuiTableColumnFlags.WidthStretch, 1.4f)
+                ImGui.tableSetupColumn("Size", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(72f))
+                ImGui.pushStyleColor(ImGuiCol.Text, EditorTheme.TEXT_MUTED.u32)
+                ImGui.tableHeadersRow()
+                ImGui.popStyleColor()
+                for (card in visible) listRow(card)
+            }
+            ImGui.endTable()
+        }
+        ImGui.popStyleColor(3)
+        ImGui.popStyleVar()
+    }
+
+    private fun listRow(card: Card) {
+        ImGui.pushID(card.path.toString())
+        try {
+            ImGui.tableNextRow(0, ROW_HEIGHT)
+            ImGui.tableSetColumnIndex(0)
+            val isSelected = selected == card.path || card.path in marked
+            if (renaming == card.path) {
+                renameField(card, -1f)
+            } else {
+                ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(6f), 0f)
+                val cx = ImGui.getCursorScreenPosX()
+                val cy = ImGui.getCursorScreenPosY()
+                ImGui.selectable(
+                    "##row",
+                    isSelected,
+                    ImGuiSelectableFlags.SpanAllColumns or ImGuiSelectableFlags.AllowDoubleClick or ImGuiSelectableFlags.AllowItemOverlap,
+                    0f,
+                    ROW_HEIGHT
+                )
+                ImGui.popStyleVar()
+                val hovered = ImGui.isItemHovered()
+                if (ImGui.isItemClicked(ImGuiMouseButton.Left)) select(card.path)
+                if (ImGui.isItemClicked(ImGuiMouseButton.Right)) selected = card.path
+                if (hovered && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) open(card.path)
+                cardMenu(card)
+                if (isSelected && renaming == null && !ImGui.getIO().wantTextInput && ImGui.isKeyPressed(ImGuiKey.F2, false)) startRename(card)
+                val list = ImGui.getWindowDrawList()
+                val iconSize = EditorFonts.px(12f)
+                Icons.draw(
+                    list,
+                    if (card.hasProject) Icon.KEYFRAME else Icon.FILM,
+                    cx,
+                    cy + (ROW_HEIGHT - iconSize) / 2f,
+                    iconSize,
+                    if (card.hasProject) EditorTheme.TEXT.u32 else EditorTheme.TEXT_DIM.u32
+                )
+                list.addText(
+                    cx + iconSize + EditorFonts.px(8f),
+                    cy + (ROW_HEIGHT - ImGui.getFontSize()) / 2f,
+                    EditorTheme.TEXT.u32,
+                    Widgets.clip(card.title, ImGui.getContentRegionAvailX() - iconSize - EditorFonts.px(8f))
+                )
+            }
+            cell(1, card.recorded)
+            cell(2, card.duration)
+            cell(3, card.server)
+            cell(4, card.player)
+            cell(5, formatSize(card.size))
+        } finally {
+            ImGui.popID()
+        }
+    }
+
+    private fun cell(column: Int, text: String, color: Int = EditorTheme.TEXT_MUTED.u32) {
+        ImGui.tableSetColumnIndex(column)
+        val list = ImGui.getWindowDrawList()
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
-        val width = ImGui.getContentRegionAvailX() - padding
-        val height = EditorFonts.px(44f)
-        ImGui.getWindowDrawList()
-            .addRectFilled(x, y, x + width, y + height, EditorTheme.PANEL_RAISED.u32, EditorFonts.px(10f))
-        ImGui.setCursorScreenPos(x + EditorFonts.px(14f), y + (height - ImGui.getFrameHeight()) / 2f)
-        ImGui.alignTextToFramePadding()
-        EditorFonts.with(EditorFonts.bodyMedium) { ImGui.textUnformatted("${marked.size} selected") }
-        ImGui.sameLine(0f, EditorFonts.px(16f))
-        if (Widgets.accentButton("New project from selection")) newProject(marked.toList())
-        Widgets.tooltip("Plays the selected recordings back to back in the order you picked them")
-        ImGui.sameLine()
-        if (Widgets.dangerButton("Delete")) confirmDeleteMany = true
-        ImGui.sameLine()
-        if (Widgets.ghostButton("Clear")) marked.clear()
+        list.addText(
+            x,
+            y + (ROW_HEIGHT - ImGui.getFontSize()) / 2f,
+            color,
+            Widgets.clip(text, ImGui.getContentRegionAvailX())
+        )
+    }
+
+    private fun select(path: Path) {
+        selected = path
+        if (ImGui.getIO().keyCtrl) {
+            if (!marked.remove(path)) marked.add(path)
+        } else if (marked.isNotEmpty() && path !in marked) {
+            marked.clear()
+        }
+    }
+
+    private fun cardMenu(card: Card) {
+        if (!Widgets.beginContextPopup("card-menu")) return
+        if (ImGui.menuItem("Open", "Enter")) open(card.path)
+        if (ImGui.menuItem("Rename", "F2")) startRename(card)
+        if (ImGui.menuItem("New Project from This")) newProject(listOf(card.path))
+        ImGui.separator()
+        if (ImGui.menuItem("Show in Folder")) openFolder(card.path)
+        if (ImGui.menuItem("Copy Path")) ImGui.setClipboardText(card.path.toAbsolutePath().toString())
+        if (ImGui.menuItem("Compact File")) {
+            if (context.host.replay.compact(card.path)) context.status("Compacting ${card.title} in the background") else context.status(
+                "Close this recording and wait for other jobs before compacting"
+            )
+        }
+        Widgets.tooltip("Rewrites the recording with the current format. Same content, usually 3 to 5 times smaller.")
+        ImGui.separator()
+        if (ImGui.menuItem("Delete", "Del")) confirmDelete = card.path
+        Widgets.endPopup()
+    }
+
+    private fun renameField(card: Card, width: Float) {
+        ImGui.setNextItemWidth(width)
+        if (renameFocus) {
+            ImGui.setKeyboardFocusHere()
+            renameFocus = false
+        }
+        if (ImGui.inputText("##rename", renameBuffer, ImGuiInputTextFlags.EnterReturnsTrue or ImGuiInputTextFlags.AutoSelectAll)) commitRename(card)
+        if (ImGui.isItemDeactivated() && renaming == card.path) {
+            if (ImGui.isKeyPressed(ImGuiKey.Escape, false)) renaming = null else commitRename(card)
+        }
     }
 
     private fun comparator(): Comparator<Card> = when (sort) {
@@ -333,39 +572,12 @@ class LibraryScreen(private val context: EditorContext) {
             ImGui.setNextItemAllowOverlap()
             ImGui.invisibleButton("card", cardWidth, cardHeight)
             val hovered = ImGui.isItemHovered()
-            if (ImGui.isItemClicked(ImGuiMouseButton.Left)) {
-                selected = card.path
-                if (ImGui.getIO().keyCtrl) {
-                    if (!marked.remove(card.path)) marked.add(card.path)
-                } else if (marked.isNotEmpty() && card.path !in marked) {
-                    marked.clear()
-                }
-            }
+            if (ImGui.isItemClicked(ImGuiMouseButton.Left)) select(card.path)
             if (ImGui.isItemClicked(ImGuiMouseButton.Right)) selected = card.path
             if (hovered && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) open(card.path)
-            if (ImGui.beginPopupContextItem("card-menu")) {
-                if (ImGui.menuItem("Open", "Enter")) open(card.path)
-                if (ImGui.menuItem("Rename", "F2")) startRename(card)
-                if (ImGui.menuItem("New Project from This")) newProject(listOf(card.path))
-                ImGui.separator()
-                if (ImGui.menuItem("Show in Folder")) openFolder(card.path)
-                if (ImGui.menuItem("Copy Path")) ImGui.setClipboardText(card.path.toAbsolutePath().toString())
-                if (ImGui.menuItem("Compact File")) {
-                    if (context.host.replay.compact(card.path)) context.status("Compacting ${card.title} in the background") else context.status(
-                        "Close this recording and wait for other jobs before compacting"
-                    )
-                }
-                Widgets.tooltip("Rewrites the recording with the current format. Same content, usually 3 to 5 times smaller.")
-                ImGui.separator()
-                if (ImGui.menuItem("Delete", "Del")) confirmDelete = card.path
-                ImGui.endPopup()
-            }
-            if (isSelected && renaming == null && !ImGui.getIO().wantTextInput && ImGui.isKeyPressed(
-                    ImGuiKey.F2,
-                    false
-                )
-            ) startRename(card)
-            val rounding = EditorFonts.px(8f)
+            cardMenu(card)
+            if (isSelected && renaming == null && !ImGui.getIO().wantTextInput && ImGui.isKeyPressed(ImGuiKey.F2, false)) startRename(card)
+            val rounding = EditorFonts.px(4f)
             val thumbHeight = cardWidth * 9f / 16f
             val texture = context.host.thumbnail(card.path)
             if (texture != null) {
@@ -379,12 +591,12 @@ class LibraryScreen(private val context: EditorContext) {
                     0f,
                     1f,
                     1f,
-                    if (hovered || isSelected) 0xFFFFFFFF.toInt() else 0xFFE8E8E8.toInt(),
+                    if (hovered || isSelected) 0xFFFFFFFF.toInt() else 0xFFE4E4E4.toInt(),
                     rounding
                 )
             } else {
                 list.addRectFilled(x, y, x + cardWidth, y + thumbHeight, EditorTheme.PANEL_RAISED.u32, rounding)
-                val iconSize = EditorFonts.px(30f)
+                val iconSize = EditorFonts.px(28f)
                 Icons.draw(
                     list,
                     Icon.FILM,
@@ -394,102 +606,52 @@ class LibraryScreen(private val context: EditorContext) {
                     EditorTheme.TEXT_DIM.u32
                 )
             }
-            if (isSelected) list.addRect(
-                x - 2f,
-                y - 2f,
-                x + cardWidth + 2f,
-                y + thumbHeight + 2f,
-                EditorTheme.ACCENT.u32,
-                rounding + 2f,
-                0,
-                2.5f
-            )
-            else if (hovered) list.addRect(
-                x,
-                y,
-                x + cardWidth,
-                y + thumbHeight,
-                EditorTheme.TEXT.u32(0.25f),
-                rounding,
-                0,
-                1f
-            )
-            else list.addRect(x, y, x + cardWidth, y + thumbHeight, EditorTheme.BORDER_SOFT.u32(0.1f), rounding, 0, 1f)
-            card.info?.let { info ->
-                EditorFonts.with(EditorFonts.smallMedium) {
-                    val label = TimeFormat.clock(info.durationNanos).substringBefore('.')
-                    val labelWidth = Widgets.textWidth(label)
-                    val pad = EditorFonts.px(5f)
-                    val right = x + cardWidth - EditorFonts.px(8f)
-                    val bottom = y + thumbHeight - EditorFonts.px(8f)
-                    list.addRectFilled(
-                        right - labelWidth - pad * 2f,
-                        bottom - ImGui.getFontSize() - pad,
-                        right,
-                        bottom,
-                        0xB3000000.toInt(),
-                        EditorFonts.px(5f)
-                    )
-                    list.addText(
-                        right - labelWidth - pad,
-                        bottom - ImGui.getFontSize() - pad / 2f,
-                        0xFFFFFFFF.toInt(),
-                        label
-                    )
-                }
+            when {
+                isSelected -> list.addRect(x, y, x + cardWidth, y + thumbHeight, EditorTheme.SELECTION.u32, rounding, 0, 2.5f)
+                hovered -> list.addRect(x, y, x + cardWidth, y + thumbHeight, EditorTheme.TEXT.u32(0.3f), rounding, 0, 1f)
+                else -> list.addRect(x, y, x + cardWidth, y + thumbHeight, EditorTheme.BORDER_SOFT.u32, rounding, 0, 1f)
+            }
+            if (card.duration.isNotEmpty()) EditorFonts.with(EditorFonts.smallMedium) {
+                val label = card.duration
+                val labelWidth = Widgets.textWidth(label)
+                val pad = EditorFonts.px(5f)
+                val right = x + cardWidth - EditorFonts.px(7f)
+                val bottom = y + thumbHeight - EditorFonts.px(7f)
+                list.addRectFilled(
+                    right - labelWidth - pad * 2f,
+                    bottom - ImGui.getFontSize() - pad,
+                    right,
+                    bottom,
+                    0xBF000000.toInt(),
+                    EditorFonts.px(4f)
+                )
+                list.addText(right - labelWidth - pad, bottom - ImGui.getFontSize() - pad / 2f, 0xFFFFFFFF.toInt(), label)
             }
             if (card.hasProject) {
-                val badge = EditorFonts.px(8f)
-                list.addCircleFilled(
-                    x + EditorFonts.px(12f),
-                    y + EditorFonts.px(12f),
-                    badge / 2f,
-                    EditorTheme.ACCENT.u32,
-                    12
-                )
-                if (hovered && ImGui.isMouseHoveringRect(
-                        x,
-                        y,
-                        x + EditorFonts.px(24f),
-                        y + EditorFonts.px(24f)
-                    )
-                ) Widgets.hint("Has saved camera work")
+                val badge = EditorFonts.px(20f)
+                val bx = x + EditorFonts.px(7f)
+                val by = y + EditorFonts.px(7f)
+                list.addRectFilled(bx, by, bx + badge, by + badge, 0xBF000000.toInt(), EditorFonts.px(4f))
+                val iconSize = EditorFonts.px(11f)
+                Icons.draw(list, Icon.KEYFRAME, bx + (badge - iconSize) / 2f, by + (badge - iconSize) / 2f, iconSize, 0xFFFFFFFF.toInt())
+                if (hovered && ImGui.isMouseHoveringRect(bx, by, bx + badge, by + badge)) Widgets.hint("Has saved camera work")
             }
-            val textY = y + thumbHeight + EditorFonts.px(9f)
+            val textY = y + thumbHeight + EditorFonts.px(7f)
             if (renaming == card.path) {
                 ImGui.setCursorScreenPos(x, textY - EditorFonts.px(3f))
-                ImGui.setNextItemWidth(cardWidth)
-                if (renameFocus) {
-                    ImGui.setKeyboardFocusHere()
-                    renameFocus = false
-                }
-                if (ImGui.inputText(
-                        "##rename",
-                        renameBuffer,
-                        ImGuiInputTextFlags.EnterReturnsTrue or ImGuiInputTextFlags.AutoSelectAll
-                    )
-                ) commitRename(card)
-                if (ImGui.isItemDeactivated() && renaming == card.path) {
-                    if (ImGui.isKeyPressed(ImGuiKey.Escape, false)) renaming = null else commitRename(card)
-                }
+                renameField(card, cardWidth)
             } else {
-                EditorFonts.with(EditorFonts.bodyMedium) {
-                    list.addText(
-                        x + EditorFonts.px(2f),
-                        textY,
-                        EditorTheme.TEXT.u32,
-                        Widgets.clip(card.title, cardWidth - EditorFonts.px(4f))
-                    )
+                EditorFonts.with(EditorFonts.smallMedium) {
+                    list.addText(x + EditorFonts.px(1f), textY, EditorTheme.TEXT.u32, Widgets.clip(card.title, cardWidth - EditorFonts.px(2f)))
                 }
             }
             EditorFonts.with(EditorFonts.small) {
-                val details =
-                    listOf(card.subtitle, formatSize(card.size)).filter { it.isNotEmpty() }.joinToString("    ")
+                val details = listOf(card.subtitle, formatSize(card.size)).filter { it.isNotEmpty() }.joinToString("    ")
                 list.addText(
-                    x + EditorFonts.px(2f),
-                    textY + EditorFonts.px(20f),
-                    EditorTheme.TEXT_MUTED.u32,
-                    Widgets.clip(details, cardWidth - EditorFonts.px(4f))
+                    x + EditorFonts.px(1f),
+                    textY + EditorFonts.px(17f),
+                    EditorTheme.TEXT_DIM.u32,
+                    Widgets.clip(details, cardWidth - EditorFonts.px(2f))
                 )
             }
         } finally {
@@ -536,40 +698,134 @@ class LibraryScreen(private val context: EditorContext) {
         }.onFailure { context.status("Could not open folder: ${it.message}") }
     }
 
-    private fun projectsGrid(padding: Float) {
+    private fun projects(width: Float, height: Float) {
         if (System.nanoTime() - lastProjectsRefreshNanos > PROJECTS_REFRESH_NANOS) {
             lastProjectsRefreshNanos = System.nanoTime()
             projectSummaries = context.host.replay.listProjects()
         }
         val query = filter.get().trim().lowercase()
         val visible = projectSummaries.filter { query.isEmpty() || it.name.lowercase().contains(query) }
-        ImGui.setCursorPosX(padding)
-        val available = ImGui.getContentRegionAvailX() - padding
-        ImGui.beginChild("##projects", available, ImGui.getContentRegionAvailY() - EditorFonts.px(12f), false)
+            .sortedByDescending { it.modifiedEpochMillis }
+        visibleCount = visible.size
+        flush("##projects", width, height)
         if (visible.isEmpty()) {
             Widgets.emptyState(
                 if (projectSummaries.isEmpty()) "No projects yet" else "Nothing matches",
                 if (projectSummaries.isEmpty()) "Open a recording and your edits are saved here. Select several recordings to build a sequence." else "Try a different search",
                 Icon.FOLDER
             )
+        } else if (context.ui.libraryList) {
+            projectsList(visible)
         } else {
-            val columns = maxOf(1, ((available + GAP) / (CARD_WIDTH + GAP)).toInt())
-            val cardWidth = (available - GAP * (columns - 1)) / columns
-            val height = PROJECT_CARD_HEIGHT
+            val target = context.ui.libraryThumbSize
+            val gap = GAP
+            val columns = maxOf(1, ((width + gap) / (target + gap)).toInt())
+            val cardWidth = (width - gap * (columns - 1)) / columns
+            val cardHeight = PROJECT_CARD_HEIGHT
             val startX = ImGui.getCursorPosX()
             val startY = ImGui.getCursorPosY()
             for ((index, summary) in visible.withIndex()) {
-                ImGui.setCursorPos(
-                    startX + (index % columns) * (cardWidth + GAP),
-                    startY + (index / columns) * (height + GAP)
-                )
+                ImGui.setCursorPos(startX + (index % columns) * (cardWidth + gap), startY + (index / columns) * (cardHeight + gap))
                 drawProjectCard(summary, cardWidth)
             }
             val rows = (visible.size + columns - 1) / columns
-            ImGui.setCursorPos(startX, startY + rows * (height + GAP))
+            ImGui.setCursorPos(startX, startY + rows * (cardHeight + gap))
             ImGui.dummy(1f, 1f)
         }
         ImGui.endChild()
+        if (!ImGui.getIO().wantTextInput) {
+            val current = selected
+            if (current != null && ImGui.isKeyPressed(ImGuiKey.Enter, false)) openProject(current)
+            if (current != null && ImGui.isKeyPressed(ImGuiKey.Delete, false)) confirmDeleteProject = current
+        }
+    }
+
+    private fun projectsList(visible: List<ProjectSummary>) {
+        val flags =
+            ImGuiTableFlags.RowBg or ImGuiTableFlags.ScrollY
+        ImGui.pushStyleVar(ImGuiStyleVar.CellPadding, EditorFonts.px(8f), EditorFonts.px(4f))
+        ImGui.pushStyleColor(ImGuiCol.HeaderHovered, EditorTheme.TEXT.u32(0.05f))
+        ImGui.pushStyleColor(ImGuiCol.HeaderActive, EditorTheme.SELECTION_FILL.u32)
+        ImGui.pushStyleColor(ImGuiCol.Header, EditorTheme.SELECTION_FILL.u32)
+        val open = EditorFonts.with(EditorFonts.small) { ImGui.beginTable("lib-projects", 6, flags) }
+        if (open) {
+            EditorFonts.with(EditorFonts.small) {
+                ImGui.tableSetupScrollFreeze(0, 1)
+                ImGui.tableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch, 3f)
+                ImGui.tableSetupColumn("Gameplay", ImGuiTableColumnFlags.WidthStretch, 2.4f)
+                ImGui.tableSetupColumn("Length", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(76f))
+                ImGui.tableSetupColumn("Keyframes", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(76f))
+                ImGui.tableSetupColumn("Clips", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(56f))
+                ImGui.tableSetupColumn("Modified", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(140f))
+                ImGui.pushStyleColor(ImGuiCol.Text, EditorTheme.TEXT_MUTED.u32)
+                ImGui.tableHeadersRow()
+                ImGui.popStyleColor()
+                for (summary in visible) projectRow(summary)
+            }
+            ImGui.endTable()
+        }
+        ImGui.popStyleColor(3)
+        ImGui.popStyleVar()
+    }
+
+    private fun projectRow(summary: ProjectSummary) {
+        ImGui.pushID(summary.path.toString())
+        try {
+            ImGui.tableNextRow(0, ROW_HEIGHT)
+            ImGui.tableSetColumnIndex(0)
+            val isSelected = selected == summary.path
+            val cx = ImGui.getCursorScreenPosX()
+            val cy = ImGui.getCursorScreenPosY()
+            ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(6f), 0f)
+            ImGui.selectable(
+                "##row",
+                isSelected,
+                ImGuiSelectableFlags.SpanAllColumns or ImGuiSelectableFlags.AllowDoubleClick or ImGuiSelectableFlags.AllowItemOverlap,
+                0f,
+                ROW_HEIGHT
+            )
+            ImGui.popStyleVar()
+            val hovered = ImGui.isItemHovered()
+            if (ImGui.isItemClicked(ImGuiMouseButton.Left) || ImGui.isItemClicked(ImGuiMouseButton.Right)) selected = summary.path
+            if (hovered && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) openProject(summary.path)
+            projectMenu(summary)
+            val list = ImGui.getWindowDrawList()
+            val iconSize = EditorFonts.px(12f)
+            Icons.draw(
+                list,
+                if (summary.isSequence) Icon.LAYERS else Icon.FOLDER,
+                cx,
+                cy + (ROW_HEIGHT - iconSize) / 2f,
+                iconSize,
+                EditorTheme.TEXT_MUTED.u32
+            )
+            list.addText(
+                cx + iconSize + EditorFonts.px(8f),
+                cy + (ROW_HEIGHT - ImGui.getFontSize()) / 2f,
+                EditorTheme.TEXT.u32,
+                Widgets.clip(summary.name, ImGui.getContentRegionAvailX() - iconSize - EditorFonts.px(8f))
+            )
+            cell(1, projectSource(summary))
+            cell(2, TimeFormat.clock(summary.lengthNanos).substringBefore('.'))
+            cell(3, summary.keyframes.toString())
+            cell(4, summary.clips.toString())
+            cell(5, DISPLAY_FORMAT.format(Instant.ofEpochMilli(summary.modifiedEpochMillis).atZone(ZoneId.systemDefault())))
+        } finally {
+            ImGui.popID()
+        }
+    }
+
+    private fun projectSource(summary: ProjectSummary): String =
+        if (summary.isSequence) "${summary.segments.size} segments" else summary.segments.firstOrNull()?.gameplay?.fileName?.toString()
+            ?.substringBeforeLast('.') ?: "No gameplay"
+
+    private fun projectMenu(summary: ProjectSummary) {
+        if (!Widgets.beginContextPopup("project-menu")) return
+        if (ImGui.menuItem("Open", "Enter")) openProject(summary.path)
+        if (ImGui.menuItem("Show in Folder")) openFolder(summary.path)
+        ImGui.separator()
+        if (ImGui.menuItem("Delete", "Del")) confirmDeleteProject = summary.path
+        Widgets.endPopup()
     }
 
     private fun drawProjectCard(summary: ProjectSummary, cardWidth: Float) {
@@ -583,17 +839,10 @@ class LibraryScreen(private val context: EditorContext) {
             ImGui.invisibleButton("project", cardWidth, height)
             val hovered = ImGui.isItemHovered()
             val isSelected = selected == summary.path
-            if (ImGui.isItemClicked(ImGuiMouseButton.Left) || ImGui.isItemClicked(ImGuiMouseButton.Right)) selected =
-                summary.path
+            if (ImGui.isItemClicked(ImGuiMouseButton.Left) || ImGui.isItemClicked(ImGuiMouseButton.Right)) selected = summary.path
             if (hovered && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) openProject(summary.path)
-            if (ImGui.beginPopupContextItem("project-menu")) {
-                if (ImGui.menuItem("Open")) openProject(summary.path)
-                if (ImGui.menuItem("Show in Folder")) openFolder(summary.path)
-                ImGui.separator()
-                if (ImGui.menuItem("Delete")) confirmDeleteProject = summary.path
-                ImGui.endPopup()
-            }
-            val rounding = EditorFonts.px(8f)
+            projectMenu(summary)
+            val rounding = EditorFonts.px(5f)
             list.addRectFilled(
                 x,
                 y,
@@ -607,17 +856,17 @@ class LibraryScreen(private val context: EditorContext) {
                 y,
                 x + cardWidth,
                 y + height,
-                if (isSelected) EditorTheme.ACCENT.u32 else EditorTheme.BORDER_SOFT.u32(0.1f),
+                if (isSelected) EditorTheme.SELECTION.u32 else EditorTheme.BORDER_SOFT.u32,
                 rounding,
                 0,
                 if (isSelected) 2f else 1f
             )
-            val inset = EditorFonts.px(12f)
+            val inset = EditorFonts.px(10f)
             val thumbs = summary.segments.map { it.gameplay }.distinct().take(3)
             var thumbX = x + inset
             val thumbY = y + inset
-            val thumbWidth = minOf(EditorFonts.px(96f), (cardWidth - inset * 2f - EditorFonts.px(12f)) / 3f)
-            val thumbHeight = thumbWidth * 9f / 16f
+            val thumbWidth = if (thumbs.size <= 1) (cardWidth - inset * 2f) else (cardWidth - inset * 2f - EditorFonts.px(4f) * (thumbs.size - 1)) / thumbs.size
+            val thumbHeight = minOf(EditorFonts.px(74f), thumbWidth * 9f / 16f)
             for (gameplay in thumbs) {
                 val texture = context.host.thumbnail(gameplay)
                 if (texture != null) list.addImageRounded(
@@ -631,59 +880,37 @@ class LibraryScreen(private val context: EditorContext) {
                     1f,
                     1f,
                     0xFFFFFFFF.toInt(),
-                    EditorFonts.px(4f)
+                    EditorFonts.px(3f)
                 )
-                else list.addRectFilled(
-                    thumbX,
-                    thumbY,
-                    thumbX + thumbWidth,
-                    thumbY + thumbHeight,
-                    EditorTheme.PANEL_SUNKEN.u32,
-                    EditorFonts.px(4f)
-                )
-                thumbX += thumbWidth + EditorFonts.px(6f)
+                else list.addRectFilled(thumbX, thumbY, thumbX + thumbWidth, thumbY + thumbHeight, EditorTheme.PANEL_SUNKEN.u32, EditorFonts.px(3f))
+                thumbX += thumbWidth + EditorFonts.px(4f)
             }
             if (thumbs.isEmpty()) list.addRectFilled(
                 x + inset,
                 thumbY,
-                x + inset + thumbWidth,
+                x + cardWidth - inset,
                 thumbY + thumbHeight,
                 EditorTheme.PANEL_SUNKEN.u32,
-                EditorFonts.px(4f)
+                EditorFonts.px(3f)
             )
-            val textY = thumbY + thumbHeight + EditorFonts.px(10f)
-            EditorFonts.with(EditorFonts.bodyMedium) {
-                list.addText(
-                    x + inset,
-                    textY,
-                    EditorTheme.TEXT.u32,
-                    Widgets.clip(summary.name, cardWidth - inset * 2f)
-                )
+            val textY = thumbY + thumbHeight + EditorFonts.px(9f)
+            EditorFonts.with(EditorFonts.smallMedium) {
+                list.addText(x + inset, textY, EditorTheme.TEXT.u32, Widgets.clip(summary.name, cardWidth - inset * 2f))
             }
             EditorFonts.with(EditorFonts.small) {
-                val kind = if (summary.isSequence) "${summary.segments.size} segments    ${
-                    TimeFormat.clock(summary.lengthNanos).substringBefore('.')
-                }" else summary.segments.firstOrNull()?.gameplay?.fileName?.toString()?.substringBeforeLast('.')
-                    ?: "No gameplay"
+                val kind = if (summary.isSequence) "${summary.segments.size} segments    ${TimeFormat.clock(summary.lengthNanos).substringBefore('.')}" else projectSource(summary)
+                list.addText(x + inset, textY + EditorFonts.px(17f), EditorTheme.TEXT_MUTED.u32, Widgets.clip(kind, cardWidth - inset * 2f))
                 list.addText(
                     x + inset,
-                    textY + EditorFonts.px(20f),
-                    EditorTheme.TEXT_MUTED.u32,
-                    Widgets.clip(kind, cardWidth - inset * 2f)
+                    textY + EditorFonts.px(32f),
+                    EditorTheme.TEXT_DIM.u32,
+                    Widgets.clip("${summary.keyframes} keyframes    ${summary.clips} clips    ${summary.markers} markers", cardWidth - inset * 2f)
                 )
                 list.addText(
                     x + inset,
-                    textY + EditorFonts.px(37f),
+                    textY + EditorFonts.px(47f),
                     EditorTheme.TEXT_DIM.u32,
-                    "${summary.keyframes} keyframes    ${summary.clips} clips    ${summary.markers} markers"
-                )
-                list.addText(
-                    x + inset,
-                    textY + EditorFonts.px(54f),
-                    EditorTheme.TEXT_DIM.u32,
-                    DISPLAY_FORMAT.format(
-                        Instant.ofEpochMilli(summary.modifiedEpochMillis).atZone(ZoneId.systemDefault())
-                    )
+                    DISPLAY_FORMAT.format(Instant.ofEpochMilli(summary.modifiedEpochMillis).atZone(ZoneId.systemDefault()))
                 )
             }
         } finally {
@@ -802,12 +1029,17 @@ class LibraryScreen(private val context: EditorContext) {
     }
 
     private companion object {
-        val SIDEBAR_WIDTH: Float get() = EditorFonts.px(200f)
-        val CARD_WIDTH: Float get() = EditorFonts.px(272f)
-        val GAP: Float get() = EditorFonts.px(20f)
+        val SIDEBAR_WIDTH: Float get() = EditorFonts.px(196f)
+        val BAR_HEIGHT: Float get() = EditorFonts.px(38f)
+        val FOOTER_HEIGHT: Float get() = EditorFonts.px(30f)
+        val STATUS_HEIGHT: Float get() = EditorFonts.px(84f)
+        val ROW_HEIGHT: Float get() = EditorFonts.px(24f)
+        val GAP: Float get() = EditorFonts.px(14f)
+        val THUMB_MIN: Float get() = EditorFonts.px(150f)
+        val THUMB_MAX: Float get() = EditorFonts.px(400f)
         val REFRESH_NANOS = Nanos.ofSeconds(2)
         val PROJECTS_REFRESH_NANOS = Nanos.ofSeconds(5)
-        val PROJECT_CARD_HEIGHT: Float get() = EditorFonts.px(160f)
+        val PROJECT_CARD_HEIGHT: Float get() = EditorFonts.px(158f)
         val FILE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
         val DISPLAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm")
     }

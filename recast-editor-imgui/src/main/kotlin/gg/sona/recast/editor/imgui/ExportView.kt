@@ -110,7 +110,7 @@ class ExportView(private val context: EditorContext) {
         val barHeight = EditorFonts.px(10f)
         list.addRectFilled(bx, by, bx + barWidth, by + barHeight, EditorTheme.CONTROL.u32, barHeight / 2f)
         if (progress > 0f) {
-            val color = if (cancelling) EditorTheme.WARNING else EditorTheme.ACCENT
+            val color = if (cancelling) EditorTheme.WARNING else EditorTheme.ACCENT_TEXT
             list.addRectFilled(
                 bx,
                 by,

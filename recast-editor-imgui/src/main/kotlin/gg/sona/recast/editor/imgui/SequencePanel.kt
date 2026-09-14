@@ -126,7 +126,7 @@ class SequencePanel(private val context: EditorContext) :
                 if (ImGui.menuItem(path.fileName.toString().substringBeforeLast('.'), "", addPath == path)) addPath =
                     path
             }
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
         ImGui.sameLine()
         val chosen = addPath

@@ -107,7 +107,7 @@ class CommandPalette {
                     rowY,
                     rowX + rowWidth,
                     rowY + rowHeight,
-                    EditorTheme.ACCENT.u32(0.9f),
+                    EditorTheme.SELECTION_FILL.u32,
                     EditorFonts.px(6f)
                 )
                 else if (hovered) list.addRectFilled(

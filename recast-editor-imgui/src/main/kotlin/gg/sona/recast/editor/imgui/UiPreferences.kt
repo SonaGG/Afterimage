@@ -61,6 +61,21 @@ class UiPreferences(private val host: EditorHost) {
         get() = read("editor.orientationGizmo", true)
         set(value) = write("editor.orientationGizmo", value)
 
+    var libraryList: Boolean
+        get() = read("library.list", false)
+        set(value) = write("library.list", value)
+
+    var libraryThumbSize: Float
+        get() = thumbSizeCache ?: (host.preference("library.thumbSize")?.toFloatOrNull() ?: 232f).also {
+            thumbSizeCache = it
+        }
+        set(value) {
+            thumbSizeCache = value
+            host.setPreference("library.thumbSize", value.toString())
+        }
+
+    private var thumbSizeCache: Float? = null
+
     var laneOrder: List<LaneKind>
         get() = laneOrderCache ?: readLaneOrder().also { laneOrderCache = it }
         set(value) {

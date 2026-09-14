@@ -13,6 +13,7 @@ import kotlin.math.roundToInt
 
 object EasingWidgets {
     private var activeHandle: String? = null
+    private var pickerDirection = EaseDirection.IN_OUT
 
     fun curve(
         list: ImDrawList,
@@ -85,47 +86,44 @@ object EasingWidgets {
         )
         if (pressed) ImGui.openPopup("$id-menu")
         var result: Easing? = null
-        if (ImGui.beginPopup("$id-menu")) {
+        if (Widgets.beginPopup("$id-menu")) {
             result = grid(current)
             if (result != null) ImGui.closeCurrentPopup()
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
         return result
     }
 
     fun grid(current: Easing): Easing? {
         var result: Easing? = null
-        val cell = EditorFonts.px(58f)
-        Widgets.smallText("Easing", EditorTheme.TEXT_DIM.u32)
-        val quick = listOf(EasingKind.LINEAR, EasingKind.EASE, EasingKind.EASE_IN, EasingKind.EASE_OUT, EasingKind.HOLD)
-        for ((index, kind) in quick.withIndex()) {
-            if (index > 0) ImGui.sameLine()
-            if (cellButton("quick-$index", Easing(kind), current.kind == kind, cell)) result = Easing(kind)
-        }
-        ImGui.separator()
+        val cell = EditorFonts.px(50f)
+        val gap = EditorFonts.px(4f)
+        val columns = 5
+        val total = cell * columns + gap * (columns - 1)
+        if (ImGui.isWindowAppearing()) pickerDirection =
+            current.kind.direction.takeIf { it != EaseDirection.NONE } ?: EaseDirection.IN_OUT
+        val directions = listOf(EaseDirection.IN, EaseDirection.OUT, EaseDirection.IN_OUT)
+        Widgets.segmented(
+            "ease-direction",
+            listOf("In", "Out", "In out"),
+            directions.indexOf(pickerDirection),
+            (total - EditorFonts.px(8f)) / 3f,
+            listOf("Slow start", "Slow end", "Slow start and end")
+        )?.let { pickerDirection = directions[it] }
+        ImGui.dummy(0f, EditorFonts.px(2f))
+        val ease = EasingKind.of(EasingFamily.EASE, pickerDirection) ?: EasingKind.EASE
         val families = EasingFamily.entries.filter {
             it != EasingFamily.LINEAR && it != EasingFamily.EASE && it != EasingFamily.HOLD && it != EasingFamily.CUSTOM
         }
-        val labelWidth = EditorFonts.px(52f)
-        for (family in families) {
-            ImGui.alignTextToFramePadding()
-            val y = ImGui.getCursorScreenPosY()
-            ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y + (cell - ImGui.getFontSize()) / 2f)
-            Widgets.smallText(family.label, EditorTheme.TEXT_MUTED.u32)
-            ImGui.sameLine(labelWidth)
-            ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y)
-            for ((index, direction) in listOf(EaseDirection.IN, EaseDirection.OUT, EaseDirection.IN_OUT).withIndex()) {
-                val kind = EasingKind.of(family, direction) ?: continue
-                if (index > 0) ImGui.sameLine()
-                if (cellButton("${family.name}-$index", Easing(kind), current.kind == kind, cell)) result = Easing(kind)
-            }
+        val kinds = listOf(EasingKind.LINEAR, ease, EasingKind.HOLD) + families.mapNotNull { EasingKind.of(it, pickerDirection) }
+        for ((index, kind) in kinds.withIndex()) {
+            if (index % columns != 0) ImGui.sameLine(0f, gap)
+            val selected = current.kind == kind
+            if (cellButton("ease-$index", Easing(kind), selected, cell)) result = Easing(kind)
         }
         if (current.kind == EasingKind.CUSTOM) {
-            ImGui.separator()
-            Widgets.smallText(
-                "Custom curve  drag the handles in the Inspector or Graph Editor",
-                EditorTheme.TEXT_DIM.u32
-            )
+            ImGui.dummy(0f, EditorFonts.px(2f))
+            Widgets.smallText("Custom curve: drag the handles in the Inspector or Graph Editor", EditorTheme.TEXT_DIM.u32)
         }
         return result
     }
@@ -137,35 +135,29 @@ object EasingWidgets {
         val hovered = ImGui.isItemHovered()
         val list = ImGui.getWindowDrawList()
         val background = when {
-            selected -> EditorTheme.ACCENT.u32(0.25f)
+            selected -> EditorTheme.SELECTION_FILL.u32
             hovered -> EditorTheme.CONTROL_HOVER.u32
             else -> EditorTheme.CONTROL.u32
         }
         list.addRectFilled(x, y, x + size, y + size, background, EditorFonts.px(6f))
-        if (selected) list.addRect(x, y, x + size, y + size, EditorTheme.ACCENT.u32, EditorFonts.px(6f), 0, 1.5f)
-        val pad = EditorFonts.px(9f)
-        val label = easing.label
-        val labelHeight = EditorFonts.px(12f)
+        if (selected) list.addRect(x, y, x + size, y + size, EditorTheme.SELECTION.u32, EditorFonts.px(6f), 0, 1.5f)
+        val pad = EditorFonts.px(10f)
+        val labelHeight = EditorFonts.px(14f)
         curve(
-            list, x + pad, y + pad, size - pad * 2f, size - pad * 2f - labelHeight, easing,
-            if (selected || hovered) EditorTheme.TEXT.u32 else EditorTheme.ACCENT_TEXT.u32, 1.5f, 24
+            list, x + pad, y + pad - EditorFonts.px(2f), size - pad * 2f, size - pad * 2f - labelHeight + EditorFonts.px(2f), easing,
+            if (selected || hovered) EditorTheme.TEXT.u32 else EditorTheme.ACCENT_TEXT.u32, 1.5f, 24, 0.18f
         )
         EditorFonts.with(EditorFonts.small) {
-            val text = when (easing.kind.direction) {
-                EaseDirection.IN -> "In"
-                EaseDirection.OUT -> "Out"
-                EaseDirection.IN_OUT -> if (easing.kind.family == EasingFamily.EASE) "Ease" else "In out"
-                EaseDirection.NONE -> label
-            }
+            val text = easing.kind.family.label
             val width = Widgets.textWidth(text)
             list.addText(
                 x + (size - width) / 2f,
-                y + size - labelHeight - EditorFonts.px(2f),
-                EditorTheme.TEXT_MUTED.u32,
+                y + size - labelHeight - EditorFonts.px(1f),
+                if (selected) EditorTheme.TEXT.u32 else EditorTheme.TEXT_MUTED.u32,
                 text
             )
         }
-        if (hovered) Widgets.hint(label)
+        if (hovered) Widgets.hint(easing.label)
         if (hovered) Widgets.cursorHand()
         return pressed
     }

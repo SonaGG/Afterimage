@@ -1707,7 +1707,7 @@ class EditorWorkspace(val context: EditorContext) {
             ImGuiKey._7,
             ImGuiKey._8
         )
-        val MARKER_COLORS = intArrayOf(0x30D158, 0x0A84FF, 0xFFD60A, 0xFF453A, 0xBF5AF2, 0xFF9F0A, 0x8E8E93, 0xFFFFFF)
+        val MARKER_COLORS = intArrayOf(0x30D158, 0x66D4CF, 0xFFD60A, 0xFF453A, 0xBF5AF2, 0xFF9F0A, 0x8E8E93, 0xFFFFFF)
         val AFTER_LAST_GAP: Long = Nanos.ofSeconds(2)
         val DEFAULT_TABS = listOf("Hierarchy", "Timeline", "Inspector")
         val UI_SCALES = floatArrayOf(0.85f, 1f, 1.15f, 1.25f, 1.5f, 1.75f, 2f)

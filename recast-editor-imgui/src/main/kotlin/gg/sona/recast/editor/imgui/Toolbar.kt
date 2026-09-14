@@ -23,8 +23,11 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, EditorFonts.px(10f), 0f)
         ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(4f), 0f)
         ImGui.pushStyleColor(ImGuiCol.WindowBg, EditorTheme.APP_BG.u32)
+        val open = ImGui.begin("##toolbar", flags)
+        ImGui.popStyleVar(4)
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(4f), 0f)
         try {
-            if (ImGui.begin("##toolbar", flags)) {
+            if (open) {
                 val list = ImGui.getWindowDrawList()
                 list.addLine(
                     viewport.workPosX,
@@ -57,7 +60,7 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             ImGui.end()
         } finally {
             ImGui.popStyleColor()
-            ImGui.popStyleVar(4)
+            ImGui.popStyleVar()
         }
     }
 
@@ -173,10 +176,19 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         ImGui.sameLine()
         Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton("t-end", Icon.SKIP_END, button, "Jump to end  End")) replay.seek(replay.endNanos)
-        ImGui.sameLine(0f, EditorFonts.px(18f))
-        Widgets.centerInRow(rowTop, rowHeight, EditorFonts.timecode.fontSize)
+        ImGui.sameLine(0f, EditorFonts.px(14f))
+        Widgets.centerInRow(rowTop, rowHeight, button)
         val timeText = TimeFormat.timecode(replay.positionNanos, context.timeline.renderFps)
+        val timeWidth = Widgets.tabularWidth(timeText, EditorFonts.timecode)
+        val timePad = EditorFonts.px(10f)
+        val fx = ImGui.getCursorScreenPosX()
+        val fy = ImGui.getCursorScreenPosY()
+        ImGui.getWindowDrawList()
+            .addRectFilled(fx, fy, fx + timeWidth + timePad * 2f, fy + button, EditorTheme.FIELD.u32, EditorFonts.px(5f))
+        ImGui.setCursorScreenPos(fx + timePad, fy + (button - EditorFonts.timecode.fontSize) / 2f)
         Widgets.tabular(timeText, EditorFonts.timecode, EditorTheme.TIMECODE.u32)
+        ImGui.setCursorScreenPos(fx, fy)
+        ImGui.dummy(timeWidth + timePad * 2f, button)
         if (ImGui.isItemHovered()) Widgets.hint(
             "${TimeFormat.clock(replay.positionNanos)} of ${TimeFormat.clock(replay.durationNanos)}   tick ${
                 TimeFormat.ticks(
@@ -224,7 +236,7 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         )
         if (hovered) Widgets.hint(if (driven) "Speed is driven by the Speed track" else "Playback speed   J and L shuttle")
         if (pressed) ImGui.openPopup("t-speed-menu")
-        if (ImGui.beginPopup("t-speed-menu")) {
+        if (Widgets.beginPopup("t-speed-menu")) {
             for (preset in SPEEDS) {
                 if (ImGui.menuItem(
                         TimeFormat.speed(preset),
@@ -236,7 +248,7 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             ImGui.separator()
             if (ImGui.menuItem("Reverse", "J", replay.speed < 0)) replay.speed = -abs(replay.speed)
             if (ImGui.menuItem("Forward", "L", replay.speed > 0)) replay.speed = abs(replay.speed)
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
     }
 
@@ -276,9 +288,9 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             }
             if (ImGui.isItemHovered()) Widgets.hint("Camera target. Click to pick another player or entity.")
             if (pressed) ImGui.openPopup("t-target-menu")
-            if (ImGui.beginPopup("t-target-menu")) {
+            if (Widgets.beginPopup("t-target-menu")) {
                 workspace.targetMenu(session)
-                ImGui.endPopup()
+                Widgets.endPopup()
             }
         }
         val status = context.host.recording.status()

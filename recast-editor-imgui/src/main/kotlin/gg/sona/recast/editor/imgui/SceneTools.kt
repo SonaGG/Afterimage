@@ -142,8 +142,8 @@ class SceneTools(private val context: EditorContext) {
             if (gizmosOn) entities(rect, session, draw, free, mouseX, mouseY, frame) else hoveredEntity = null
             if (poseTool.consumedClick) consumedClick = true
             box?.let {
-                overlay.addRectFilled(it.startX, it.startY, mouseX, mouseY, EditorTheme.ACCENT.u32(0.12f))
-                overlay.addRect(it.startX, it.startY, mouseX, mouseY, EditorTheme.ACCENT.u32(0.8f), 0f, 0, 1f)
+                overlay.addRectFilled(it.startX, it.startY, mouseX, mouseY, EditorTheme.TEXT.u32(0.08f))
+                overlay.addRect(it.startX, it.startY, mouseX, mouseY, EditorTheme.TEXT.u32(0.6f), 0f, 0, 1f)
             }
             for ((x, y, text) in overlayTags) tag(overlay, x, y, text)
         } finally {
@@ -217,7 +217,7 @@ class SceneTools(private val context: EditorContext) {
             val dragging = active != null && keyframe.timeNanos in active.times
             val base = EditorTheme.modeColor(keyframe.mode)
             val color = when {
-                dragging || handle.selected -> EditorTheme.ACCENT.abgr(1f)
+                dragging || handle.selected -> EditorTheme.SELECTION.abgr(1f)
                 hovered -> 0xFFFFFFFF.toInt()
                 else -> base.abgr(0.9f)
             }
@@ -667,7 +667,7 @@ class SceneTools(private val context: EditorContext) {
             val shadow = replay.shadow
             val local = shadow.localPlayer
             if (selected == local.entityId && local.hasPosition) {
-                entityBox(draw, local.x, local.y, local.z, 0.3, 1.8, EditorTheme.ACCENT.abgr(1f), 2f)
+                entityBox(draw, local.x, local.y, local.z, 0.3, 1.8, EditorTheme.SELECTION.abgr(1f), 2f)
             } else {
                 val entity = shadow.entities[selected]
                 if (entity != null && !entity.dead) {
@@ -680,7 +680,7 @@ class SceneTools(private val context: EditorContext) {
                         pose.z,
                         if (player) 0.3 else 0.35,
                         if (player) 1.8 else 0.7,
-                        EditorTheme.ACCENT.abgr(1f),
+                        EditorTheme.SELECTION.abgr(1f),
                         2f
                     )
                 }

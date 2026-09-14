@@ -4,8 +4,8 @@ import gg.sona.recast.index.ReplayIndex
 
 object PlayerColors {
     val PALETTE = listOf(
-        EditorTheme.Rgb(0xFF9F0A), EditorTheme.Rgb(0x30D158), EditorTheme.Rgb(0xBF5AF2), EditorTheme.Rgb(0x64D2FF),
-        EditorTheme.Rgb(0xFF375F), EditorTheme.Rgb(0xFFD60A), EditorTheme.Rgb(0x5E5CE6), EditorTheme.Rgb(0xAC8E68),
+        EditorTheme.Rgb(0xFF9F0A), EditorTheme.Rgb(0x30D158), EditorTheme.Rgb(0xBF5AF2), EditorTheme.Rgb(0x66D4CF),
+        EditorTheme.Rgb(0xFF375F), EditorTheme.Rgb(0xFFD60A), EditorTheme.Rgb(0xB7E36B), EditorTheme.Rgb(0xAC8E68),
     )
 
     fun of(index: ReplayIndex, name: String, isRecorder: Boolean): EditorTheme.Rgb {

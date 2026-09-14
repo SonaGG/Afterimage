@@ -110,6 +110,14 @@ class GraphEditorPanel(private val context: EditorContext) :
         drawStretchBrackets(drawList, session)
         drawPlayhead(drawList, if (drag == Drag.SCRUB && lastScrub >= 0L) lastScrub else replay.positionNanos)
         if (drag == Drag.BOX) drawBox(drawList)
+        EditorFonts.with(EditorFonts.small) {
+            drawList.addText(
+                originX + EditorFonts.px(10f),
+                originY + height - ImGui.getFontSize() - EditorFonts.px(8f),
+                EditorTheme.TEXT_DIM.u32,
+                statusText(session)
+            )
+        }
         drawList.popClipRect()
         drawAxis(drawList)
 
@@ -367,7 +375,7 @@ class GraphEditorPanel(private val context: EditorContext) :
                 y + EditorFonts.px(4f),
                 listX + EditorFonts.px(2f),
                 y + rowHeight - EditorFonts.px(4f),
-                EditorTheme.ACCENT.u32
+                EditorTheme.SELECTION.u32
             )
             ImGui.setCursorScreenPos(originX - EditorFonts.px(24f), y + (rowHeight - EditorFonts.px(18f)) / 2f)
             Widgets.iconToggle(
@@ -414,6 +422,8 @@ class GraphEditorPanel(private val context: EditorContext) :
     private fun toolbar(session: EditorSession) {
         EditorTheme.pushToolbarStyle()
         try {
+            val rowY = ImGui.getCursorScreenPosY()
+            val right = ImGui.getCursorScreenPosX() + ImGui.getContentRegionAvailX()
             val modes = Mode.entries
             Widgets.segmented(
                 "graph-mode",
@@ -427,52 +437,22 @@ class GraphEditorPanel(private val context: EditorContext) :
                     fitRequested = true
                 }
             ImGui.sameLine(0f, EditorFonts.px(10f))
-            Widgets.iconToggle(
-                "graph-norm",
-                Icon.FIT,
-                normalized,
-                Toolbar.BUTTON,
-                "Normalize: fit every curve to its own height"
-            )
+            Widgets.iconToggle("graph-norm", Icon.FIT, normalized, Toolbar.BUTTON, "Normalize: fit every curve to its own height")
                 ?.let {
                     normalized = it
                     fitRequested = true
                 }
             ImGui.sameLine()
-            Widgets.iconToggle(
-                "graph-sel",
-                Icon.KEYFRAME,
-                selectedOnly,
-                Toolbar.BUTTON,
-                "Show only channels with selected keyframes"
-            )
+            Widgets.iconToggle("graph-sel", Icon.KEYFRAME, selectedOnly, Toolbar.BUTTON, "Show only channels with selected keyframes")
                 ?.let { selectedOnly = it }
             ImGui.sameLine()
-            Widgets.iconToggle(
-                "graph-handles",
-                Icon.PATH,
-                showHandles,
-                Toolbar.BUTTON,
-                "Show tangent handles on selected keyframes"
-            )
+            Widgets.iconToggle("graph-handles", Icon.PATH, showHandles, Toolbar.BUTTON, "Show tangent handles on selected keyframes")
                 ?.let { showHandles = it }
             ImGui.sameLine()
-            Widgets.iconToggle(
-                "graph-snap",
-                Icon.MAGNET,
-                snap,
-                Toolbar.BUTTON,
-                "Snap keyframes to frames while dragging  hold Shift to bypass"
-            )
+            Widgets.iconToggle("graph-snap", Icon.MAGNET, snap, Toolbar.BUTTON, "Snap keyframes to frames while dragging  hold Shift to bypass")
                 ?.let { snap = it }
             ImGui.sameLine()
-            Widgets.iconToggle(
-                "graph-link",
-                Icon.LINK,
-                linked,
-                Toolbar.BUTTON,
-                "Scroll and zoom together with the Timeline"
-            )
+            Widgets.iconToggle("graph-link", Icon.LINK, linked, Toolbar.BUTTON, "Scroll and zoom together with the Timeline")
                 ?.let {
                     linked = it
                     if (!it) {
@@ -480,63 +460,23 @@ class GraphEditorPanel(private val context: EditorContext) :
                         ownVisible = visibleNanos
                     }
                 }
-            ImGui.sameLine()
-            if (Widgets.iconButton(
-                    "graph-fit",
-                    Icon.FULLSCREEN,
-                    Toolbar.BUTTON,
-                    "Fit the selection, or everything  F"
-                )
-            ) fitSelection(session)
-            ImGui.sameLine(0f, EditorFonts.px(14f))
-            Widgets.verticalSeparator(Toolbar.BUTTON)
             ImGui.sameLine(0f, EditorFonts.px(10f))
-            val selection = session.selection
-            val hasKeys = selection.keyframeTimes.isNotEmpty() || selection.valueKeys.isNotEmpty()
-            if (!hasKeys) ImGui.beginDisabled()
-            if (Widgets.button("Ease")) session.execute(
-                EaseKeyframes.easyEase(
-                    selection.keyframeTimes,
-                    selection.valueKeys
-                )
-            )
-            Widgets.tooltip("Easy ease the selected keyframes  F9")
+            if (Widgets.iconButton("graph-fit", Icon.FULLSCREEN, Toolbar.BUTTON, "Fit the selection, or everything  F")) fitSelection(session)
+            val rightWidth = Widgets.lastWidth("graph-right")
             ImGui.sameLine()
-            if (Widgets.button("Ease in")) session.execute(
-                EaseKeyframes.easeIn(
-                    selection.keyframeTimes,
-                    selection.valueKeys
-                )
-            )
-            Widgets.tooltip("Slow down arriving at the selected keyframes  Shift+F9")
-            ImGui.sameLine()
-            if (Widgets.button("Ease out")) session.execute(
-                EaseKeyframes.easeOut(
-                    selection.keyframeTimes,
-                    selection.valueKeys
-                )
-            )
-            Widgets.tooltip("Start slowly leaving the selected keyframes  Ctrl+Shift+F9")
-            ImGui.sameLine()
-            if (Widgets.button("Linear")) session.execute(
-                EaseKeyframes.linear(
-                    selection.keyframeTimes,
-                    selection.valueKeys
-                )
-            )
-            Widgets.tooltip("Straight speed through the selected keyframes")
-            if (!hasKeys) ImGui.endDisabled()
-            ImGui.sameLine(0f, EditorFonts.px(10f))
-            val easing = currentEasing(session)
-            ImGui.setNextItemWidth(EditorFonts.px(150f))
-            if (!hasKeys) ImGui.beginDisabled()
-            EasingWidgets.picker("graph-easing", easing ?: Easing.LINEAR, EditorFonts.px(150f))
-                ?.let { applyEasing(session, it) }
-            if (!hasKeys) ImGui.endDisabled()
-            ImGui.sameLine(0f, EditorFonts.px(10f))
-            extrapolationMenu(session)
-            ImGui.sameLine(0f, EditorFonts.px(10f))
-            Widgets.smallText(statusText(session), EditorTheme.TEXT_DIM.u32)
+            ImGui.setCursorScreenPos(maxOf(ImGui.getCursorScreenPosX(), right - rightWidth), rowY)
+            Widgets.measured("graph-right") {
+                val selection = session.selection
+                val hasKeys = selection.keyframeTimes.isNotEmpty() || selection.valueKeys.isNotEmpty()
+                val easing = currentEasing(session)
+                if (!hasKeys) ImGui.beginDisabled()
+                EasingWidgets.picker("graph-easing", easing ?: Easing.LINEAR, EditorFonts.px(140f))
+                    ?.let { applyEasing(session, it) }
+                if (!hasKeys) ImGui.endDisabled()
+                if (ImGui.isItemHovered()) Widgets.hint("Easing of the selected keyframes  F9 easy ease, Shift+F9 in, Ctrl+Shift+F9 out")
+                ImGui.sameLine(0f, EditorFonts.px(6f))
+                extrapolationMenu(session)
+            }
         } finally {
             EditorTheme.popToolbarStyle()
         }
@@ -572,7 +512,7 @@ class GraphEditorPanel(private val context: EditorContext) :
                 ).postExtrapolation.label
             }"
         }
-        if (Widgets.popupButton("graph-extrap", label, EditorFonts.px(190f), muted = target == null)) {
+        if (Widgets.popupButton("graph-extrap", label, EditorFonts.px(172f), muted = target == null)) {
             if (target == null) Widgets.mutedText("Select a keyframe to pick a track")
             else {
                 val lane = (target as? GraphChannel.Value)?.lane
@@ -604,7 +544,7 @@ class GraphEditorPanel(private val context: EditorContext) :
                     Widgets.tooltip(option.description)
                 }
             }
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
         Widgets.tooltip("What the track does before its first and after its last keyframe")
     }
@@ -772,6 +712,9 @@ class GraphEditorPanel(private val context: EditorContext) :
                 val y = yOf(channel, value)
                 if (!previousX.isNaN()) {
                     val inside = nanos in first..last
+                    if (inside && focused && anySelected) list.addQuadFilled(
+                        previousX, previousY, x, y, x, plotBottom, previousX, plotBottom, channel.color.u32(alpha * 0.06f)
+                    )
                     list.addLine(previousX, previousY, x, y, if (inside) color else dim, if (focused) 2f else 1.5f)
                 }
                 previousX = x
@@ -921,12 +864,12 @@ class GraphEditorPanel(private val context: EditorContext) :
         val x1 = xAt(first)
         val x2 = xAt(last)
         val top = originY + RULER_HEIGHT + EditorFonts.px(4f)
-        val color = EditorTheme.ACCENT.u32(0.7f)
+        val color = EditorTheme.SELECTION.u32(0.7f)
         list.addLine(x1, top, x1, plotBottom, color, 1f)
         list.addLine(x2, top, x2, plotBottom, color, 1f)
         val size = BRACKET
-        list.addRectFilled(x1 - size, top, x1, top + size * 2f, EditorTheme.ACCENT.u32, 2f)
-        list.addRectFilled(x2, top, x2 + size, top + size * 2f, EditorTheme.ACCENT.u32, 2f)
+        list.addRectFilled(x1 - size, top, x1, top + size * 2f, EditorTheme.SELECTION.u32, 2f)
+        list.addRectFilled(x2, top, x2 + size, top + size * 2f, EditorTheme.SELECTION.u32, 2f)
     }
 
     private fun drawPlayhead(list: ImDrawList, nanos: Long) {

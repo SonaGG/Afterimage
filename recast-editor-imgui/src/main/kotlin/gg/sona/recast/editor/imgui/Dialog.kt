@@ -175,7 +175,7 @@ class Dialog(val title: String, val icon: Icon, private val width: Float, privat
                     y,
                     x + rowWidth,
                     y + rowHeight,
-                    EditorTheme.ACCENT.u32,
+                    EditorTheme.SELECTION_FILL.u32,
                     EditorFonts.px(6f)
                 )
                 else if (hovered) list.addRectFilled(

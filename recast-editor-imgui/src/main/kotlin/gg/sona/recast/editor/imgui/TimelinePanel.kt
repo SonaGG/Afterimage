@@ -121,7 +121,7 @@ class TimelinePanel(private val context: EditorContext) :
         originY = ImGui.getCursorScreenPosY()
         width = maxOf(1f, ImGui.getContentRegionAvailX() - HEADER_WIDTH)
         val available = ImGui.getContentRegionAvailY()
-        canvasHeight = maxOf(RULER_HEIGHT + tracksHeight + ADD_ROW_HEIGHT + NAV_HEIGHT + NAV_GAP, available - 2f)
+        canvasHeight = maxOf(RULER_HEIGHT + tracksHeight + NAV_HEIGHT + NAV_GAP, available - 2f)
         val totalHeight = canvasHeight
         visibleNanos = maxOf(1L, (duration / view.zoom).toLong())
         if (view.followPlayhead && replay.playing && drag == DragKind.NONE) followPlayhead(replay.positionNanos, view)
@@ -144,7 +144,7 @@ class TimelinePanel(private val context: EditorContext) :
         drawHeaders(drawList, session)
         headerWidgets(session)
         headerMenus(session, view)
-        addTrackRow(view)
+        addTrackButton(view)
 
         ImGui.setCursorScreenPos(originX, originY)
         ImGui.invisibleButton("timeline-canvas", width, totalHeight)
@@ -219,29 +219,14 @@ class TimelinePanel(private val context: EditorContext) :
         val replay = session.replay ?: return
         EditorTheme.pushToolbarStyle()
         try {
-            if (Widgets.iconButton(
-                    "tl-key",
-                    Icon.KEYFRAME_ADD,
-                    TOOL_SIZE,
-                    "Add camera keyframe at playhead (Ctrl+K)"
-                )
-            ) session.keyframeAtPlayhead(context.host.camera.currentPose())
+            val rowY = ImGui.getCursorScreenPosY()
+            val right = ImGui.getCursorScreenPosX() + ImGui.getContentRegionAvailX()
+            if (Widgets.iconButton("tl-key", Icon.KEYFRAME_ADD, TOOL_SIZE, "Add camera keyframe at playhead  Ctrl+K"))
+                session.keyframeAtPlayhead(context.host.camera.currentPose())
             ImGui.sameLine()
-            if (Widgets.iconButton(
-                    "tl-marker",
-                    Icon.MARKER,
-                    TOOL_SIZE,
-                    "Add marker at playhead (M)"
-                )
-            ) addMarker(session, replay.positionNanos)
+            if (Widgets.iconButton("tl-marker", Icon.MARKER, TOOL_SIZE, "Add marker at playhead  M")) addMarker(session, replay.positionNanos)
             ImGui.sameLine()
-            if (Widgets.iconButton(
-                    "tl-clip",
-                    Icon.FILM,
-                    TOOL_SIZE,
-                    "Create clip from the in and out points"
-                )
-            ) clipFromInOut(session)
+            if (Widgets.iconButton("tl-clip", Icon.FILM, TOOL_SIZE, "Create clip from the in and out points")) clipFromInOut(session)
             Widgets.verticalSeparator(TOOL_SIZE)
             if (Widgets.iconButton("tl-in", Icon.MARK_IN, TOOL_SIZE, "Set in point at playhead  I")) session.execute(
                 SetInOutPoints(replay.positionNanos, maxOf(replay.positionNanos, outPoint(session)))
@@ -251,59 +236,59 @@ class TimelinePanel(private val context: EditorContext) :
                 SetInOutPoints(minOf(session.project.inPointNanos, replay.positionNanos), replay.positionNanos)
             )
             ImGui.sameLine()
-            Widgets.iconToggle(
-                "tl-loop",
-                Icon.LOOP,
-                context.loopPlayback,
-                TOOL_SIZE,
-                "Loop between the in and out points"
-            )?.let { context.loopPlayback = it }
-            Widgets.verticalSeparator(TOOL_SIZE)
-            Widgets.iconToggle(
-                "tl-snap",
-                Icon.MAGNET,
-                view.snapToTicks,
-                TOOL_SIZE,
-                "Snap to frames and items (hold Shift to bypass)"
-            )?.let { view.snapToTicks = it }
+            Widgets.iconToggle("tl-loop", Icon.LOOP, context.loopPlayback, TOOL_SIZE, "Loop between the in and out points")
+                ?.let { context.loopPlayback = it }
+            val rightWidth = Widgets.lastWidth("tl-right")
             ImGui.sameLine()
-            Widgets.iconToggle(
-                "tl-follow",
-                Icon.FOLLOW,
-                view.followPlayhead,
-                TOOL_SIZE,
-                "Follow playhead while playing (F)"
-            )?.let { view.followPlayhead = it }
-            Widgets.verticalSeparator(TOOL_SIZE)
-            if (Widgets.iconButton("tl-zoom-out", Icon.ZOOM_OUT, TOOL_SIZE, "Zoom out (wheel)")) zoomAround(
-                view,
-                1 / 1.5,
-                session.playheadNanos
-            )
-            ImGui.sameLine()
-            if (Widgets.iconButton("tl-zoom-in", Icon.ZOOM_IN, TOOL_SIZE, "Zoom in (wheel)")) zoomAround(
-                view,
-                1.5,
-                session.playheadNanos
-            )
-            ImGui.sameLine()
-            if (Widgets.iconButton("tl-fit", Icon.FIT, TOOL_SIZE, "Fit whole replay")) {
-                view.zoom = 1.0
-                view.offsetNanos = 0L
+            ImGui.setCursorScreenPos(maxOf(ImGui.getCursorScreenPosX(), right - rightWidth), rowY)
+            Widgets.measured("tl-right") {
+                Widgets.iconToggle("tl-snap", Icon.MAGNET, view.snapToTicks, TOOL_SIZE, "Snap to frames and items  hold Shift to bypass")
+                    ?.let { view.snapToTicks = it }
+                ImGui.sameLine()
+                Widgets.iconToggle("tl-follow", Icon.FOLLOW, view.followPlayhead, TOOL_SIZE, "Follow playhead while playing  F")
+                    ?.let { view.followPlayhead = it }
+                Widgets.verticalSeparator(TOOL_SIZE)
+                if (Widgets.iconButton("tl-zoom-out", Icon.ZOOM_OUT, TOOL_SIZE, "Zoom out  wheel")) zoomAround(view, 1 / 1.5, session.playheadNanos)
+                ImGui.sameLine()
+                zoomSlider(view, session)
+                ImGui.sameLine()
+                if (Widgets.iconButton("tl-zoom-in", Icon.ZOOM_IN, TOOL_SIZE, "Zoom in  wheel")) zoomAround(view, 1.5, session.playheadNanos)
+                ImGui.sameLine()
+                if (Widgets.iconButton("tl-fit", Icon.FIT, TOOL_SIZE, "Fit whole replay")) {
+                    view.zoom = 1.0
+                    view.offsetNanos = 0L
+                }
             }
-            ImGui.sameLine()
-            ImGui.dummy(6f, 0f)
-            ImGui.sameLine()
-            ImGui.alignTextToFramePadding()
-            Widgets.smallText(String.format("%.1fx", view.zoom))
-            ImGui.sameLine()
-            ImGui.dummy(10f, 0f)
-            ImGui.sameLine()
-            ImGui.alignTextToFramePadding()
         } finally {
             EditorTheme.popToolbarStyle()
         }
         ImGui.dummy(0f, 2f)
+    }
+
+    private fun zoomSlider(view: TimelineView, session: EditorSession) {
+        val width = EditorFonts.px(90f)
+        val height = TOOL_SIZE
+        val x = ImGui.getCursorScreenPosX()
+        val y = ImGui.getCursorScreenPosY()
+        ImGui.invisibleButton("tl-zoom", width, height)
+        val hovered = ImGui.isItemHovered()
+        val active = ImGui.isItemActive()
+        val maxZoom = maxOf(1.0, duration.toDouble() / MIN_VISIBLE)
+        val t = (Math.log(view.zoom) / Math.log(maxZoom)).toFloat().coerceIn(0f, 1f)
+        val list = ImGui.getWindowDrawList()
+        val pad = EditorFonts.px(6f)
+        val cy = y + height / 2f
+        val track = EditorFonts.px(3f)
+        list.addRectFilled(x + pad, cy - track / 2f, x + width - pad, cy + track / 2f, EditorTheme.CONTROL_HOVER.u32, track / 2f)
+        val kx = x + pad + (width - pad * 2f) * t
+        list.addRectFilled(x + pad, cy - track / 2f, kx, cy + track / 2f, EditorTheme.ACCENT.u32, track / 2f)
+        list.addCircleFilled(kx, cy, EditorFonts.px(if (active) 6f else 5f), EditorTheme.TEXT.u32, 16)
+        if (active) {
+            val next = ((ImGui.getMousePosX() - x - pad) / (width - pad * 2f)).coerceIn(0f, 1f)
+            val zoom = Math.pow(maxZoom, next.toDouble()).coerceIn(1.0, maxZoom)
+            if (zoom != view.zoom) zoomAround(view, zoom / view.zoom, session.playheadNanos)
+        }
+        if (hovered || active) Widgets.hint(String.format("Zoom %.1fx", view.zoom))
     }
 
     private fun laneTop(kind: LaneKind): Float {
@@ -358,7 +343,7 @@ class TimelinePanel(private val context: EditorContext) :
                 headerX + EditorFonts.px(12f),
                 originY + (RULER_HEIGHT - ImGui.getFontSize()) / 2f,
                 EditorTheme.TEXT_DIM.u32,
-                Widgets.clip(session.project.name, HEADER_WIDTH - EditorFonts.px(24f))
+                Widgets.clip(session.project.name, HEADER_WIDTH - EditorFonts.px(44f))
             )
         }
         var y = originY + RULER_HEIGHT
@@ -385,7 +370,7 @@ class TimelinePanel(private val context: EditorContext) :
             when (lane.kind) {
                 LaneKind.PLAYERS -> gameLanes.drawPlayerHeaders(drawList, y, lane.rowHeight, headerX, originX)
                 LaneKind.WORLD -> gameLanes.drawWorldHeaders(drawList, y, lane.rowHeight, headerX)
-                else -> EditorFonts.with(EditorFonts.bodyMedium) {
+                else -> EditorFonts.with(EditorFonts.smallMedium) {
                     val textColor = if (muted) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT.u32
                     drawList.addText(
                         headerX + EditorFonts.px(31f),
@@ -404,15 +389,16 @@ class TimelinePanel(private val context: EditorContext) :
         val project = session.project
         for (lane in lanes) {
             val top = laneTop(lane.kind)
-            val size = 18f
+            val size = EditorFonts.px(18f)
             val y = top + (lane.height - size) / 2f
-            var x = originX - 8f - size
+            var x = originX - EditorFonts.px(8f) - size
+            val reveal = drag == DragKind.NONE && ImGui.isWindowHovered() && ImGui.isMouseHoveringRect(headerX, top, originX, top + lane.height)
             ImGui.pushID("lane-${lane.kind.name}")
             try {
                 when (lane.kind) {
                     LaneKind.CAMERA -> {
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -423,7 +409,7 @@ class TimelinePanel(private val context: EditorContext) :
                         x -= size + 2f
                         ImGui.setCursorScreenPos(x, y)
                         val state = project.lane(LaneKind.CAMERA)
-                        Widgets.iconToggle(
+                        if (reveal || state.locked) Widgets.iconToggle(
                             "lock",
                             if (state.locked) Icon.LOCK else Icon.UNLOCK,
                             state.locked,
@@ -432,7 +418,7 @@ class TimelinePanel(private val context: EditorContext) :
                         )?.let { session.execute(SetLaneState(LaneKind.CAMERA, state.copy(locked = it))) }
                         x -= size + 2f
                         ImGui.setCursorScreenPos(x, y)
-                        Widgets.iconToggle(
+                        if (reveal || state.muted) Widgets.iconToggle(
                             "eye",
                             if (state.muted) Icon.EYE_OFF else Icon.EYE,
                             !state.muted,
@@ -455,7 +441,7 @@ class TimelinePanel(private val context: EditorContext) :
                     LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY -> {
                         val valueLane = ValueLane.entries.first { it.kind == lane.kind }
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -466,7 +452,7 @@ class TimelinePanel(private val context: EditorContext) :
                         x -= size + 2f
                         ImGui.setCursorScreenPos(x, y)
                         val state = project.lane(lane.kind)
-                        Widgets.iconToggle(
+                        if (reveal || state.muted) Widgets.iconToggle(
                             "eye",
                             if (state.muted) Icon.EYE_OFF else Icon.EYE,
                             !state.muted,
@@ -477,7 +463,7 @@ class TimelinePanel(private val context: EditorContext) :
 
                     LaneKind.VIEW -> {
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -488,7 +474,7 @@ class TimelinePanel(private val context: EditorContext) :
                         x -= size + 2f
                         ImGui.setCursorScreenPos(x, y)
                         val state = project.lane(LaneKind.VIEW)
-                        Widgets.iconToggle(
+                        if (reveal || state.muted) Widgets.iconToggle(
                             "eye",
                             if (state.muted) Icon.EYE_OFF else Icon.EYE,
                             !state.muted,
@@ -499,7 +485,7 @@ class TimelinePanel(private val context: EditorContext) :
 
                     LaneKind.CLIPS -> {
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -511,7 +497,7 @@ class TimelinePanel(private val context: EditorContext) :
 
                     LaneKind.MARKERS -> {
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -523,7 +509,7 @@ class TimelinePanel(private val context: EditorContext) :
 
                     LaneKind.TIMELAPSE -> {
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -534,7 +520,7 @@ class TimelinePanel(private val context: EditorContext) :
                         x -= size + 2f
                         ImGui.setCursorScreenPos(x, y)
                         val state = project.lane(LaneKind.TIMELAPSE)
-                        Widgets.iconToggle(
+                        if (reveal || state.muted) Widgets.iconToggle(
                             "eye",
                             if (state.muted) Icon.EYE_OFF else Icon.EYE,
                             !state.muted,
@@ -546,7 +532,7 @@ class TimelinePanel(private val context: EditorContext) :
                     LaneKind.POSE -> {
                         val entity = context.selectedEntityId?.takeIf { PoseTools.poseable(session, it) }
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -558,7 +544,7 @@ class TimelinePanel(private val context: EditorContext) :
                         x -= size + 2f
                         ImGui.setCursorScreenPos(x, y)
                         val state = project.lane(LaneKind.POSE)
-                        Widgets.iconToggle(
+                        if (reveal || state.muted) Widgets.iconToggle(
                             "eye",
                             if (state.muted) Icon.EYE_OFF else Icon.EYE,
                             !state.muted,
@@ -569,7 +555,7 @@ class TimelinePanel(private val context: EditorContext) :
 
                     LaneKind.MOMENTS -> {
                         ImGui.setCursorScreenPos(x, y)
-                        if (Widgets.iconButton(
+                        if (reveal && Widgets.iconButton(
                                 "add",
                                 Icon.PLUS,
                                 size,
@@ -614,7 +600,7 @@ class TimelinePanel(private val context: EditorContext) :
                                 barY,
                                 headerX + 12f + (originX - 24f - headerX) * events.progress.toFloat(),
                                 barY + 2f,
-                                EditorTheme.ACCENT.u32
+                                EditorTheme.ACCENT_TEXT.u32
                             )
                         }
                     }
@@ -922,30 +908,20 @@ class TimelinePanel(private val context: EditorContext) :
         view.hiddenLanes.add(kind)
     }
 
-    private fun addTrackRow(view: TimelineView) {
-        val top = originY + RULER_HEIGHT + tracksHeight
-        val drawList = ImGui.getWindowDrawList()
-        drawList.addRectFilled(headerX, top, originX + width, top + ADD_ROW_HEIGHT, EditorTheme.LANE_HEADER.u32(0.6f))
-        drawList.addLine(
-            headerX,
-            top + ADD_ROW_HEIGHT,
-            originX + width,
-            top + ADD_ROW_HEIGHT,
-            EditorTheme.LANE_LINE.u32,
-            1f
-        )
+    private fun addTrackButton(view: TimelineView) {
         val hiddenLanes = allLanes.filter { optional(it.kind) && lanes.none { shown -> shown.kind == it.kind } }
-        ImGui.setCursorScreenPos(headerX + 8f, top + 3f)
-        EditorTheme.pushCompactFrame()
-        try {
-            ImGui.beginDisabled(hiddenLanes.isEmpty())
-            if (Widgets.ghostButton("Add track", HEADER_WIDTH - 16f)) ImGui.openPopup("add-track")
-            ImGui.endDisabled()
-        } finally {
-            ImGui.popStyleVar()
-        }
-        if (hiddenLanes.isEmpty()) Widgets.tooltip("All tracks are shown") else Widgets.tooltip("Show a track: speed ramps, FOV, time of day, shake, view switches or freezes")
-        if (ImGui.beginPopup("add-track")) {
+        val size = EditorFonts.px(18f)
+        ImGui.setCursorScreenPos(originX - EditorFonts.px(8f) - size, originY + (RULER_HEIGHT - size) / 2f)
+        if (Widgets.iconButton(
+                "add-track",
+                Icon.PLUS,
+                size,
+                if (hiddenLanes.isEmpty()) "All tracks are shown" else "Show a track: speed ramps, FOV, time of day, shake, view switches or freezes",
+                enabled = hiddenLanes.isNotEmpty(),
+                iconScale = 0.6f
+            )
+        ) ImGui.openPopup("add-track")
+        if (Widgets.beginPopup("add-track")) {
             Widgets.mutedText("Show track")
             ImGui.separator()
             for (lane in hiddenLanes) {
@@ -962,7 +938,7 @@ class TimelinePanel(private val context: EditorContext) :
                 }
                 Widgets.tooltip(hint)
             }
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
     }
 
@@ -1017,44 +993,25 @@ class TimelinePanel(private val context: EditorContext) :
         val inNanos = if (drag == DragKind.IN_POINT) dragCurrentNanos else inPoint(session)
         val outNanos = if (drag == DragKind.OUT_POINT) dragCurrentNanos else outPoint(session)
         val bottom = originY + RULER_HEIGHT + tracksHeight
-        val color = EditorTheme.IN_OUT.u32
+        val trimmed = inNanos > 0L || outNanos < duration
+        val color = if (trimmed) EditorTheme.SELECTION else EditorTheme.IN_OUT
+        val top = originY + RULER_HEIGHT - HANDLE_HEIGHT
         val left = xAt(inNanos)
-        if (left >= originX - 1f && left <= originX + width + 1f) {
-            drawList.addLine(left, originY, left, bottom, EditorTheme.IN_OUT.u32(0.55f), 1f)
-            drawList.addRectFilled(
-                left,
-                originY + RULER_HEIGHT - HANDLE_HEIGHT,
-                left + HANDLE_WIDTH,
-                originY + RULER_HEIGHT,
-                color,
-                2f
-            )
-            drawList.addRectFilled(
-                left,
-                originY + RULER_HEIGHT - HANDLE_HEIGHT,
-                left + 2f,
-                originY + RULER_HEIGHT,
-                0xFFFFFFFF.toInt()
-            )
-        }
         val right = xAt(outNanos)
+        if (trimmed) {
+            val x1 = left.coerceIn(originX, originX + width)
+            val x2 = right.coerceIn(originX, originX + width)
+            if (x2 > x1) drawList.addRect(x1, top, x2, bottom, color.u32(0.5f), 0f, 0, 1f)
+        }
+        if (left >= originX - 1f && left <= originX + width + 1f) {
+            drawList.addLine(left, top, left, bottom, color.u32(0.7f), 1f)
+            drawList.addRectFilled(left, top, left + HANDLE_WIDTH, originY + RULER_HEIGHT, color.u32, 2f)
+            drawList.addRectFilled(left + EditorFonts.px(3f), top + EditorFonts.px(3f), left + HANDLE_WIDTH - EditorFonts.px(3f), originY + RULER_HEIGHT - EditorFonts.px(3f), EditorTheme.PANEL_SUNKEN.u32(0.6f), 1f)
+        }
         if (right >= originX - 1f && right <= originX + width + 1f) {
-            drawList.addLine(right, originY, right, bottom, EditorTheme.IN_OUT.u32(0.55f), 1f)
-            drawList.addRectFilled(
-                right - HANDLE_WIDTH,
-                originY + RULER_HEIGHT - HANDLE_HEIGHT,
-                right,
-                originY + RULER_HEIGHT,
-                color,
-                2f
-            )
-            drawList.addRectFilled(
-                right - 2f,
-                originY + RULER_HEIGHT - HANDLE_HEIGHT,
-                right,
-                originY + RULER_HEIGHT,
-                0xFFFFFFFF.toInt()
-            )
+            drawList.addLine(right, top, right, bottom, color.u32(0.7f), 1f)
+            drawList.addRectFilled(right - HANDLE_WIDTH, top, right, originY + RULER_HEIGHT, color.u32, 2f)
+            drawList.addRectFilled(right - HANDLE_WIDTH + EditorFonts.px(3f), top + EditorFonts.px(3f), right - EditorFonts.px(3f), originY + RULER_HEIGHT - EditorFonts.px(3f), EditorTheme.PANEL_SUNKEN.u32(0.6f), 1f)
         }
     }
 
@@ -1352,7 +1309,7 @@ class TimelinePanel(private val context: EditorContext) :
             val y1 = top + 3f
             val y2 = top + height - 3f
             drawList.addRectFilled(left, y1, maxOf(right, left + 2f), y2, fill.u32, 3f)
-            drawList.addRectFilled(left, y1, maxOf(right, left + 2f), y1 + 3f, fill.u32(1f), 3f)
+            drawList.addRectFilled(left, y1, maxOf(right, left + 2f), y1 + 3f, EditorTheme.TEXT.u32(0.14f), 3f)
             drawList.addRect(
                 left,
                 y1,
@@ -1582,16 +1539,11 @@ class TimelinePanel(private val context: EditorContext) :
         if (x < originX || x > originX + width) return
         val bottom = tracksBottom()
         drawList.addLine(x, originY + 4f, x, bottom, EditorTheme.PLAYHEAD.u32, 1.5f)
-        drawList.addTriangleFilled(
-            x - 7f,
-            originY + 2f,
-            x + 7f,
-            originY + 2f,
-            x,
-            originY + 12f,
-            EditorTheme.PLAYHEAD.u32
-        )
-        drawList.addRectFilled(x - 7f, originY, x + 7f, originY + 4f, EditorTheme.PLAYHEAD.u32, 1f)
+        val half = EditorFonts.px(5f)
+        val headBottom = originY + EditorFonts.px(9f)
+        drawList.addRectFilled(x - half, originY + 1f, x + half, headBottom, EditorTheme.PLAYHEAD.u32, 2f)
+        drawList.addTriangleFilled(x - half, headBottom - 1f, x + half, headBottom - 1f, x, headBottom + half, EditorTheme.PLAYHEAD.u32)
+        if (drag != DragKind.SCRUB) return
         val label = TimeFormat.timecode(positionNanos, context.timeline.renderFps)
         EditorFonts.with(EditorFonts.small) {
             val labelWidth = Widgets.textWidth(label)
@@ -1612,7 +1564,7 @@ class TimelinePanel(private val context: EditorContext) :
         val mouseX = ImGui.getMousePosX()
         val mouseY = ImGui.getMousePosY()
         if (mouseX < originX || mouseX > originX + width || mouseY > tracksBottom()) return
-        drawList.addLine(mouseX, originY + RULER_HEIGHT, mouseX, tracksBottom(), EditorTheme.TEXT.u32(0.12f), 1f)
+        drawList.addLine(mouseX, originY + RULER_HEIGHT, mouseX, tracksBottom(), EditorTheme.SKIMMER.u32(0.45f), 1f)
         val label = TimeFormat.clock(nanosAt(mouseX).coerceIn(0L, duration))
         EditorFonts.with(EditorFonts.small) {
             val labelWidth = Widgets.textWidth(label)
@@ -1634,8 +1586,8 @@ class TimelinePanel(private val context: EditorContext) :
         val x2 = maxOf(dragStartMouseX, ImGui.getMousePosX())
         val y1 = minOf(dragStartMouseY, ImGui.getMousePosY())
         val y2 = maxOf(dragStartMouseY, ImGui.getMousePosY())
-        drawList.addRectFilled(x1, y1, x2, y2, EditorTheme.ACCENT.u32(0.15f))
-        drawList.addRect(x1, y1, x2, y2, EditorTheme.ACCENT.u32(0.8f), 0f, 0, 1f)
+        drawList.addRectFilled(x1, y1, x2, y2, EditorTheme.TEXT.u32(0.08f))
+        drawList.addRect(x1, y1, x2, y2, EditorTheme.TEXT.u32(0.6f), 0f, 0, 1f)
     }
 
     private fun navTop(): Float = originY + canvasHeight - NAV_HEIGHT
@@ -1644,34 +1596,34 @@ class TimelinePanel(private val context: EditorContext) :
 
     private fun drawNavigator(drawList: ImDrawList, view: TimelineView) {
         val top = navTop()
-        drawList.addRectFilled(originX, top, originX + width, top + NAV_HEIGHT, EditorTheme.RULER_BG.u32, 3f)
+        drawList.addRectFilled(originX, top, originX + width, top + NAV_HEIGHT, EditorTheme.PANEL_SUNKEN.u32, NAV_HEIGHT / 2f)
         for (time in keyTimes) drawList.addRectFilled(
             navX(time) - 1f,
-            top + 4f,
+            top + 3f,
             navX(time) + 1f,
-            top + NAV_HEIGHT - 4f,
-            EditorTheme.KEYFRAME_SMOOTH.u32(0.5f)
+            top + NAV_HEIGHT - 3f,
+            EditorTheme.KEYFRAME_SMOOTH.u32(0.35f)
         )
         for (marker in markers) drawList.addRectFilled(
             navX(marker.nanos) - 1f,
-            top + 4f,
+            top + 3f,
             navX(marker.nanos) + 1f,
-            top + NAV_HEIGHT - 4f,
-            Widgets.rgbToU32(marker.color, 0.6f)
+            top + NAV_HEIGHT - 3f,
+            Widgets.rgbToU32(marker.color, 0.5f)
         )
         val left = navX(view.offsetNanos)
         val right = navX(view.offsetNanos + visibleNanos)
+        val thumbHovered = drag == DragKind.NONE && ImGui.isWindowHovered() && ImGui.isMouseHoveringRect(originX, top, originX + width, top + NAV_HEIGHT)
         drawList.addRectFilled(
             left,
-            top + 2f,
-            maxOf(right, left + 6f),
-            top + NAV_HEIGHT - 2f,
-            EditorTheme.CONTROL_HOVER.u32(0.9f),
-            3f
+            top + 1f,
+            maxOf(right, left + NAV_HEIGHT),
+            top + NAV_HEIGHT - 1f,
+            EditorTheme.TEXT.u32(if (thumbHovered) 0.3f else 0.2f),
+            NAV_HEIGHT / 2f
         )
-        drawList.addRect(left, top + 2f, maxOf(right, left + 6f), top + NAV_HEIGHT - 2f, EditorTheme.TEXT_DIM.u32, 3f)
         val playX = navX(context.replay?.positionNanos ?: 0L)
-        drawList.addLine(playX, top + 1f, playX, top + NAV_HEIGHT - 1f, EditorTheme.PLAYHEAD.u32, 1.5f)
+        drawList.addRectFilled(playX - 1f, top + 1f, playX + 1f, top + NAV_HEIGHT - 1f, EditorTheme.PLAYHEAD.u32, 1f)
     }
 
     private fun navX(nanos: Long): Float = originX + (nanos.toDouble() / duration * width).toFloat()
@@ -2898,12 +2850,11 @@ class TimelinePanel(private val context: EditorContext) :
         )
         val SEGMENT_COLORS =
             listOf(EditorTheme.ACCENT_TEXT, EditorTheme.WARNING, EditorTheme.SUCCESS, EditorTheme.KEYFRAME_BEZIER)
-        val MARKER_COLORS = intArrayOf(0x59B36A, 0x3FA9FF, 0xFFC94D, 0xE5484D, 0xC792EA, 0xF5A623, 0x8A8A8A, 0xFFFFFF)
+        val MARKER_COLORS = intArrayOf(0x59B36A, 0x66D4CF, 0xFFC94D, 0xE5484D, 0xC792EA, 0xF5A623, 0x8A8A8A, 0xFFFFFF)
         val RULER_HEIGHT: Float get() = EditorFonts.px(24f)
-        val HEADER_WIDTH: Float get() = EditorFonts.px(168f)
-        val NAV_HEIGHT: Float get() = EditorFonts.px(14f)
+        val HEADER_WIDTH: Float get() = EditorFonts.px(156f)
+        val NAV_HEIGHT: Float get() = EditorFonts.px(12f)
         val NAV_GAP: Float get() = EditorFonts.px(6f)
-        val ADD_ROW_HEIGHT: Float get() = EditorFonts.px(26f)
         val TOOL_SIZE: Float get() = EditorFonts.px(26f)
         val KEY_RADIUS: Float get() = EditorFonts.px(6.5f)
         val EDGE_GRAB: Float get() = EditorFonts.px(7f)

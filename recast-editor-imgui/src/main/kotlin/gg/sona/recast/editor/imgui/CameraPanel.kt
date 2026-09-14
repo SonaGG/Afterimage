@@ -117,7 +117,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
                     )
                 )
             }
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
     }
 
@@ -154,7 +154,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
                     }
                 }
             }
-            ImGui.endPopup()
+            Widgets.endPopup()
         }
     }
 
@@ -338,7 +338,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
         val lane = session.project.lane(LaneKind.CAMERA)
         Widgets.header("Camera path")
         when {
-            control.pathActive -> Widgets.pill("Following path", EditorTheme.ACCENT)
+            control.pathActive -> Widgets.pill("Following path", EditorTheme.ACCENT_TEXT)
             lane.muted -> Widgets.pill("Path disabled", EditorTheme.TEXT_MUTED)
             else -> Widgets.smallText(
                 "Playhead is outside ${TimeFormat.short(camera.startNanos)} to ${

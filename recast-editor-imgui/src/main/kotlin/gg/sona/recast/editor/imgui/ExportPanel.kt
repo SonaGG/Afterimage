@@ -207,7 +207,7 @@ class ExportPanel(private val context: EditorContext) :
                         }
                     }
                 }
-                ImGui.endPopup()
+                Widgets.endPopup()
             }
             if (SIZES[sizeIndex].width == 0) {
                 Widgets.property("")
@@ -497,7 +497,7 @@ class ExportPanel(private val context: EditorContext) :
         when (download?.state) {
             ExportState.QUEUED, ExportState.RUNNING -> {
                 val fraction = download.progress.toFloat()
-                Widgets.pill("downloading ffmpeg", EditorTheme.ACCENT)
+                Widgets.pill("downloading ffmpeg", EditorTheme.ACCENT_TEXT)
                 ImGui.sameLine()
                 if (Widgets.ghostButton("Cancel")) download.cancel()
                 Widgets.progress(fraction, -1f, "${(fraction * 100).toInt()}%")
@@ -996,7 +996,7 @@ class ExportPanel(private val context: EditorContext) :
     private fun job(backend: ExportBackend, handle: ExportHandle) {
         val state = handle.state
         val color = when (state) {
-            ExportState.RUNNING -> EditorTheme.ACCENT
+            ExportState.RUNNING -> EditorTheme.ACCENT_TEXT
             ExportState.DONE -> EditorTheme.SUCCESS
             ExportState.FAILED -> EditorTheme.RECORD
             ExportState.CANCELLED, ExportState.QUEUED -> EditorTheme.CONTROL_ACTIVE

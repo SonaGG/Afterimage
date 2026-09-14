@@ -133,7 +133,7 @@ class PoseSceneTool(private val context: EditorContext) {
             val width: Float
             when (part) {
                 selected -> {
-                    color = EditorTheme.ACCENT.abgr(1f)
+                    color = EditorTheme.SELECTION.abgr(1f)
                     width = 2f
                 }
 

@@ -62,7 +62,6 @@ object EditorFonts {
         ImGui.getIO().fontDefault = body
     }
 
-    /** The icon font whose raster size is closest to [size]; glyphs are drawn scaled to the exact size. */
     fun icons(size: Float): ImFont = iconFonts.minByOrNull { (raster, _) -> kotlin.math.abs(raster - size) }!!.second
 
     inline fun <T> with(font: ImFont, block: () -> T): T {

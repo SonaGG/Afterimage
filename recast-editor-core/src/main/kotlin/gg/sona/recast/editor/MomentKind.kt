@@ -5,10 +5,10 @@ enum class MomentKind(val label: String, val color: Int) {
     MULTI_KILL("Multi kill", 0xFF6B6B),
     CLUTCH("Clutch", 0xFFD60A),
     DEATH("Death", 0xBF5AF2),
-    ESCAPE("Escape", 0x64D2FF),
+    ESCAPE("Escape", 0x66D4CF),
     EXPLOSION("Explosion", 0xFF8A3D),
     VICTORY("Victory", 0x30D158),
-    HIGHLIGHT("Highlight", 0x0A84FF),
+    HIGHLIGHT("Highlight", 0xFF375F),
     CUSTOM("Moment", 0xFFFFFF);
 
     companion object {

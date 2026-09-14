@@ -98,7 +98,7 @@ sealed class GraphChannel(
                 listOf(EditorTheme.WARNING, EditorTheme.PURPLE, EditorTheme.PINK),
                 "deg"
             ),
-            FOV(listOf("Field of view"), listOf(EditorTheme.TEAL), "deg"),
+            FOV(listOf("Field of view"), listOf(EditorTheme.MINT), "deg"),
         }
 
         override fun enabled(project: EditorProject): Boolean = !project.lane(LaneKind.CAMERA).muted
@@ -330,7 +330,7 @@ sealed class GraphChannel(
     companion object {
         val LANE_COLORS = mapOf(
             ValueLane.SPEED to EditorTheme.SUCCESS,
-            ValueLane.FOV to EditorTheme.TEAL,
+            ValueLane.FOV to EditorTheme.MINT,
             ValueLane.TIME_OF_DAY to EditorTheme.WARNING,
             ValueLane.SHAKE to EditorTheme.PINK,
             ValueLane.SHAKE_FREQUENCY to EditorTheme.PURPLE,

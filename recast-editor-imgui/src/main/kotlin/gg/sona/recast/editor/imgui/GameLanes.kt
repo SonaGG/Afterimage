@@ -364,7 +364,7 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
                     centerY + 1f,
                     x + r,
                     centerY + 1f,
-                    EditorTheme.TEAL.u32(0.8f)
+                    EditorTheme.MINT.u32(0.8f)
                 )
 
                 IndexEventKind.EQUIP -> drawList.addRect(

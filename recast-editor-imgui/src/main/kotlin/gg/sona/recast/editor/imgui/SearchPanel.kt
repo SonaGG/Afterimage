@@ -118,7 +118,7 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
             y,
             x + width,
             y + height,
-            if (hovered) EditorTheme.ACCENT.u32(0.35f) else EditorTheme.CONTROL.u32,
+            if (hovered) EditorTheme.CONTROL_HOVER.u32 else EditorTheme.CONTROL.u32,
             height / 2f
         )
         list.addText(x + padX, y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, text)
@@ -249,7 +249,7 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
             UUID.randomUUID(),
             hit.nanos,
             hit.label,
-            hit.kind?.let { kindRgb(it) } ?: 0x0A84FF,
+            hit.kind?.let { kindRgb(it) } ?: 0xA6A6AB,
             if (hit.kind != null) MarkerKind.EVENT else MarkerKind.NOTE
         )
         session.execute(AddMarker(marker))
@@ -285,7 +285,7 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
                     UUID.randomUUID(),
                     hit.nanos,
                     hit.label,
-                    hit.kind?.let { kindRgb(it) } ?: 0x0A84FF,
+                    hit.kind?.let { kindRgb(it) } ?: 0xA6A6AB,
                     if (hit.kind != null) MarkerKind.EVENT else MarkerKind.NOTE))
         )
         context.toast("Added ${hits.size} marker${if (hits.size == 1) "" else "s"}")
@@ -318,7 +318,7 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
         IndexEventKind.DEATH -> 0xBF5AF2
         IndexEventKind.HURT -> 0xFF9F0A
         IndexEventKind.EXPLOSION -> 0xFF8A3D
-        IndexEventKind.PROJECTILE_SPAWN, IndexEventKind.PROJECTILE_END -> 0x64D2FF
+        IndexEventKind.PROJECTILE_SPAWN, IndexEventKind.PROJECTILE_END -> 0x66D4CF
         IndexEventKind.TITLE, IndexEventKind.ACHIEVEMENT -> 0xFFD60A
         IndexEventKind.MARKER -> 0xFFFFFF
         IndexEventKind.JOIN, IndexEventKind.LEAVE, IndexEventKind.RESPAWN, IndexEventKind.DIMENSION -> 0x30D158
