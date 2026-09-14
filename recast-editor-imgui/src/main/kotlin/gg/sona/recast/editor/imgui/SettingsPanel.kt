@@ -1,5 +1,6 @@
 package gg.sona.recast.editor.imgui
 
+import gg.sona.recast.clip.export.ExportState
 import imgui.ImGui
 import java.nio.file.Path
 
@@ -117,9 +118,28 @@ class SettingsPanel(private val context: EditorContext) : DialogPanel("Settings"
                     Widgets.smallText(backend.ffmpegVersion ?: "found", EditorTheme.TEXT_DIM.u32, clipToWidth = true)
                     Widgets.tooltip(backend.ffmpegPath)
                 } else {
-                    Widgets.pill("not installed", EditorTheme.WARNING)
-                    ImGui.sameLine()
-                    if (backend.ffmpegDownloadSupported && Widgets.accentButton("Download")) backend.downloadFfmpeg()
+                    val download = backend.queue().handles()
+                        .filter { it.job.name == "download ffmpeg" }
+                        .maxByOrNull { it.startedAtNanos }
+                    when (download?.state) {
+                        ExportState.QUEUED, ExportState.RUNNING -> {
+                            val fraction = download.progress.toFloat()
+                            Widgets.progress(fraction, -1f, download.detail.ifBlank { "${(fraction * 100).toInt()}%" })
+                        }
+
+                        ExportState.FAILED -> {
+                            Widgets.pill("download failed", EditorTheme.RECORD)
+                            ImGui.sameLine()
+                            if (Widgets.accentButton("Retry")) backend.downloadFfmpeg()
+                            Widgets.tooltip(download.failure?.message ?: "Unknown error")
+                        }
+
+                        else -> {
+                            Widgets.pill("not installed", EditorTheme.WARNING)
+                            ImGui.sameLine()
+                            if (backend.ffmpegDownloadSupported && Widgets.accentButton("Download")) backend.downloadFfmpeg()
+                        }
+                    }
                 }
                 val hardware =
                     backend.encoders().filter { it.endsWith("_nvenc") || it.endsWith("_amf") || it.endsWith("_qsv") }

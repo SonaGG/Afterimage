@@ -100,7 +100,6 @@ class ExportPanel(private val context: EditorContext) :
         }
         val session = context.session
         val replay = session?.replay
-        if (!backend.ffmpegAvailable && format.needsFfmpeg) format = ExportFormat.PNG_SEQUENCE
         when (dialog.section) {
             PRESETS -> presets()
             JOBS -> jobs(backend)
@@ -129,11 +128,16 @@ class ExportPanel(private val context: EditorContext) :
         val backend = context.exports ?: return
         val session = context.session
         val replay = session?.replay
-        val busy = backend.queue().handles().any { it.state == ExportState.RUNNING }
-        val ready = session != null && replay != null && !busy
-        if (session == null) {
+        val busy = backend.queue().handles().any { it.state == ExportState.RUNNING && it.job.name != "download ffmpeg" }
+        val ready = session != null && replay != null && !busy && (backend.ffmpegAvailable || !format.needsFfmpeg)
+        val hint = when {
+            session == null -> if (busy) "An export is running" else "Open a replay to export"
+            format.needsFfmpeg && !backend.ffmpegAvailable -> "Download ffmpeg to export video"
+            else -> null
+        }
+        if (hint != null) {
             ImGui.alignTextToFramePadding()
-            Widgets.smallText(if (busy) "An export is running" else "Open a replay to export", EditorTheme.TEXT_DIM.u32)
+            Widgets.smallText(hint, EditorTheme.TEXT_DIM.u32)
         }
         ImGui.sameLine()
         val more = EditorFonts.px(30f)
@@ -186,7 +190,6 @@ class ExportPanel(private val context: EditorContext) :
             ImGui.setNextItemWidth(-1f)
             Widgets.enumCombo("##format", format) { it.label }?.let {
                 format = it
-                if (!it.needsFfmpeg || backend.ffmpegAvailable) Unit else format = ExportFormat.PNG_SEQUENCE
                 if (it == ExportFormat.GIF && fps > 30) fps = 24
             }
             Widgets.property("Size")
@@ -245,6 +248,10 @@ class ExportPanel(private val context: EditorContext) :
             Widgets.property("Speed & freeze", "Bake speed ramps and freezes into the output timing")
             Widgets.toggle("##timelanes", applyTimeLanes)?.let { applyTimeLanes = it }
             Widgets.endProperties()
+        }
+        if (format.needsFfmpeg && !backend.ffmpegAvailable) {
+            ImGui.spacing()
+            ffmpegStatus(backend)
         }
     }
 
@@ -469,24 +476,39 @@ class ExportPanel(private val context: EditorContext) :
     private var sizeMode = false
 
     private fun ffmpegStatus(backend: ExportBackend) {
-        val downloading = backend.queue().handles()
-            .firstOrNull { it.job.name == "download ffmpeg" && (it.state == ExportState.RUNNING || it.state == ExportState.QUEUED) }
         if (backend.ffmpegAvailable) {
             Widgets.smallText("ffmpeg ${backend.ffmpegVersion ?: ""}", EditorTheme.TEXT_DIM.u32, clipToWidth = true)
             Widgets.tooltip(backend.ffmpegPath)
             return
         }
+        val download = backend.queue().handles()
+            .filter { it.job.name == "download ffmpeg" }
+            .maxByOrNull { it.startedAtNanos }
+        when (download?.state) {
+            ExportState.QUEUED, ExportState.RUNNING -> {
+                val fraction = download.progress.toFloat()
+                Widgets.pill("downloading ffmpeg", EditorTheme.ACCENT)
+                ImGui.sameLine()
+                if (Widgets.ghostButton("Cancel")) download.cancel()
+                Widgets.progress(fraction, -1f, "${(fraction * 100).toInt()}%")
+                Widgets.smallText(download.detail.ifBlank { "connecting" }, EditorTheme.TEXT_DIM.u32, clipToWidth = true)
+                return
+            }
+
+            ExportState.FAILED -> {
+                Widgets.pill("download failed", EditorTheme.RECORD)
+                ImGui.sameLine()
+                if (Widgets.accentButton("Retry")) backend.downloadFfmpeg()
+                Widgets.wrappedText(download.failure?.message ?: "Unknown error", EditorTheme.RECORD.u32)
+                return
+            }
+
+            else -> Unit
+        }
         Widgets.pill("ffmpeg not installed", EditorTheme.WARNING)
         ImGui.sameLine()
-        if (downloading != null) {
-            Widgets.progress(downloading.progress.toFloat(), -1f, downloading.detail.ifBlank { "downloading" })
-            return
-        }
         if (backend.ffmpegDownloadSupported) {
-            if (Widgets.accentButton("Download ffmpeg")) {
-                backend.downloadFfmpeg()
-                context.status("Downloading ffmpeg")
-            }
+            if (Widgets.accentButton("Download ffmpeg")) backend.downloadFfmpeg()
             Widgets.tooltip("Downloads the ffmpeg libraries for this system (about 35 MB) into the recast/ffmpeg folder")
         }
         Widgets.wrappedText(
