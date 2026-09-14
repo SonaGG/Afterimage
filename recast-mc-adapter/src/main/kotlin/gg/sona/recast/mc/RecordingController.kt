@@ -302,7 +302,7 @@ class RecordingController(
         val player = platform.minecraft.player ?: return
         if (breakerId != player.networkId) return
         val clamped = if (stage in 0..9) stage else -1
-        if (position == lastBreakPosition && clamped == lastBreakStage) return
+        if (clamped < 0 && position == lastBreakPosition && clamped == lastBreakStage) return
         lastBreakPosition = position
         lastBreakStage = clamped
         poseWriter.reset()

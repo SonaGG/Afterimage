@@ -2,9 +2,7 @@ package gg.sona.recast.mc
 
 import gg.sona.recast.camera.CameraMode
 import gg.sona.recast.mc.mixin.*
-import gg.sona.recast.net.PacketWriter
 import gg.sona.recast.protocol.LocalScreen
-import gg.sona.recast.protocol.SlotCodec
 import gg.sona.recast.replay.session.ReplaySession
 import gg.sona.recast.replay.state.shadow.ShadowWindow
 import io.netty.buffer.Unpooled
@@ -56,7 +54,6 @@ class ScreenMirror(
     private var syncedText: String? = null
     private var syncedCursor = -1
     private var syncedDetail = -1
-    private val itemWriter = PacketWriter(256)
 
     var renderingModel: Boolean = false
         private set
@@ -291,7 +288,7 @@ class ScreenMirror(
                 if (window.items.isNotEmpty()) {
                     val converted = arrayOfNulls<ItemStack>(slots)
                     for (index in 0 until minOf(slots, window.items.size)) converted[index] =
-                        toStack(window.items[index])
+                        ItemStacks.toMinecraft(window.items[index])
                     menu.setItems(converted)
                 }
                 for ((property, value) in window.properties) menu.setData(property, value)
@@ -377,20 +374,6 @@ class ScreenMirror(
             if (manager != null && previous != null && previous != WorldSettings.GameMode.CREATIVE) (manager as ClientPlayerInteractionManagerAccessor).`recast$setRawGameMode`(
                 previous
             )
-        }
-    }
-
-    private fun toStack(item: gg.sona.recast.protocol.ItemStack): ItemStack? {
-        if (item.isEmpty) return null
-        itemWriter.reset()
-        SlotCodec.write(itemWriter, item)
-        val buffer = PacketByteBuf(Unpooled.wrappedBuffer(itemWriter.toByteArray()))
-        return try {
-            buffer.readItem()
-        } catch (error: Exception) {
-            null
-        } finally {
-            buffer.release()
         }
     }
 

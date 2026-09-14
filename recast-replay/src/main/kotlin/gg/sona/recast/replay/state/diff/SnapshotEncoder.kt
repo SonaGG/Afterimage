@@ -127,7 +127,7 @@ object SnapshotEncoder {
     }
 
     private fun encodeEntities(client: ShadowClient, nanos: Long, out: MutableList<ClientboundPacket>) {
-        val entities = client.entities.values().sortedBy { it.id }
+        val entities = client.entities.values().filter { it.visibleAt(nanos) }.sortedBy { it.id }
         for (entity in entities) entityPackets(client, entity, nanos, out)
         for (entity in entities) attachmentPackets(entity, out)
         val player = client.localPlayer

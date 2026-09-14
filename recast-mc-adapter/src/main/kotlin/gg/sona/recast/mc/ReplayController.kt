@@ -1,5 +1,6 @@
 package gg.sona.recast.mc
 
+import com.mojang.authlib.GameProfile
 import gg.sona.recast.core.time.Nanos
 import gg.sona.recast.mc.mixin.MinecraftAccessor
 import gg.sona.recast.mc.ui.WorkspaceScreen
@@ -45,6 +46,7 @@ class ReplayController(private val platform: MinecraftPlatform, val camera: Came
     var isWorkspaceOpen: () -> Boolean = { false }
 
     private var mirror: VirtualConnection? = null
+    var seekRestorer: SeekRestorer? = null
     private var lastFrameNanos = Long.MIN_VALUE
     private var lastPositionNanos = Long.MIN_VALUE
     private var lastCameraFrameNanos = Long.MIN_VALUE
@@ -112,11 +114,11 @@ class ReplayController(private val platform: MinecraftPlatform, val camera: Came
         }
         return try {
             val source = FileReplaySource.open(target)
-            val profile = minecraft.session?.profile ?: VirtualConnection.ANONYMOUS
-            val mirror = VirtualConnection(minecraft, profile)
-            mirror.timeOverride = timeOverride
             val replay = ReplaySession(source, emptyList(), ReplayOptions())
+            val mirror = VirtualConnection(minecraft, cameraProfile(replay))
+            mirror.timeOverride = timeOverride
             mirror.profileLookup = { uuid -> replay.shadow.players.profile(uuid)?.toPacketEntry() }
+            mirror.targetFace = { replay.shadow.localPlayer.target?.face ?: -1 }
             val projection =
                 RecorderProjection(replay.shadow, mirror, ProjectionOptions(predictBlocks = !replay.recordedTicks))
             replay.addConsumer(projection)
@@ -131,6 +133,8 @@ class ReplayController(private val platform: MinecraftPlatform, val camera: Came
                     if (mode == DeliveryMode.SEEK) {
                         minecraft.world?.chunkSource?.tick()
                         syncChunkFrames = SYNC_CHUNK_FRAMES_AFTER_SEEK
+                        camera.onSeeked(replay)
+                        seekRestorer?.restore(replay, mirror)
                     }
                 }
             })
@@ -155,6 +159,14 @@ class ReplayController(private val platform: MinecraftPlatform, val camera: Came
             close()
             false
         }
+    }
+
+    private fun cameraProfile(replay: ReplaySession): GameProfile {
+        val identity = replay.shadow.recorderIdentity
+        val uuid = identity.uuid
+        val name = identity.name
+        if (uuid != null && !name.isNullOrEmpty()) return GameProfile(uuid, name)
+        return minecraft.session?.profile ?: VirtualConnection.ANONYMOUS
     }
 
     fun close() = close(leaveWorld = true)

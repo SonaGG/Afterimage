@@ -26,6 +26,7 @@ import gg.sona.recast.render.ffmpeg.FfmpegRuntime
 import gg.sona.recast.replay.session.ReplaySession
 import gg.sona.recast.replay.source.FileReplaySource
 import gg.sona.recast.replay.state.shadow.EntityKind
+import net.minecraft.util.math.MathHelper
 import net.minecraft.client.Minecraft
 import net.minecraft.client.TickTimer
 import net.minecraft.client.gui.GameGui
@@ -69,6 +70,8 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
     val preview = PreviewRenderer(minecraft, cameraDriver)
     val chunkWorkers = ChunkWorkers(minecraft)
     val clock = ReplayClock()
+    val seekRestorer = SeekRestorer(minecraft, exporter.sounds, clock) { beginTickEvents(it) }
+        .also { replayer.seekRestorer = it }
     private val spriteClock = SpriteClock(minecraft)
     private val displayRandom = Random()
     private var vignetteValue = 0f
@@ -377,9 +380,15 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
     private var eventNanos = 0L
     private var eventCounter = 0L
 
+    fun beginTickEvents(boundaryNanos: Long) {
+        eventNanos = boundaryNanos
+        eventCounter = 0
+        reseed(DeterministicRandom.mix(boundaryNanos, TICK_SALT), entities = false)
+    }
+
     fun worldTick(boundaryNanos: Long) {
         val world = minecraft.world ?: return
-        if (minecraft.player == null) return
+        val player = minecraft.player ?: return
         eventNanos = boundaryNanos
         eventCounter = 0
         reseed(DeterministicRandom.mix(boundaryNanos, TICK_SALT), entities = true)
@@ -403,6 +412,7 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
             if (world.lightningCooldown > 0) world.lightningCooldown -= 1
             world.tickEntities()
             world.tick()
+            world.doRandomDisplayTicks(MathHelper.floor(player.x), MathHelper.floor(player.y), MathHelper.floor(player.z))
             minecraft.particleManager.tick()
             visualsController.onTick()
             cameraDriver.onClientTick()

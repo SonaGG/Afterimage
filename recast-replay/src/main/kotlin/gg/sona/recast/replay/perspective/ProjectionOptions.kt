@@ -1,5 +1,6 @@
 package gg.sona.recast.replay.perspective
 
+import gg.sona.recast.protocol.MetadataEntry
 import gg.sona.recast.protocol.PlayerAbilities
 
 
@@ -16,5 +17,17 @@ data class ProjectionOptions(
         const val ADVENTURE = 2
         const val SPECTATOR = 3
         val HUD_METADATA_INDEXES = setOf(1, 17, 18)
+        const val CAMERA_FLAG_MASK = 0x01 or 0x20
+
+        fun cameraMetadata(entries: List<MetadataEntry>): List<MetadataEntry> =
+            entries.mapNotNull { entry ->
+                when {
+                    entry.index in HUD_METADATA_INDEXES -> entry
+                    entry.index == 0 && entry.type == MetadataEntry.BYTE ->
+                        MetadataEntry.ofByte(0, entry.byteValue() and CAMERA_FLAG_MASK)
+
+                    else -> null
+                }
+            }
     }
 }

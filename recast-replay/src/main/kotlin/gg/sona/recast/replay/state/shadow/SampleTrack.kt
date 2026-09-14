@@ -42,6 +42,15 @@ class SampleTrack(capacity: Int = 16) {
         cadenceNanos = DEFAULT_CADENCE_NANOS
     }
 
+    fun copyFrom(other: SampleTrack) {
+        clear()
+        val start = (other.count - ring.size).coerceAtLeast(0)
+        for (index in start until other.count) {
+            val sample = other[index]
+            push(sample.nanos, sample.a, sample.b, sample.c)
+        }
+    }
+
     private fun updateCadence() {
         var found = 0
         for (index in 1 until count) {

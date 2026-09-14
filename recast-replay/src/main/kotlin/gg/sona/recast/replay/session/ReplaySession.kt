@@ -147,7 +147,7 @@ class ReplaySession(
             scratch.seek(target)
             if (!StateDiff.canDiff(shadow, scratch.shadow)) return false
             shadow.localPlayer.cameraFrames.dropAfter(minOf(target, positionNanos))
-            val diff = StateDiff.packets(shadow, scratch.shadow, target, positionNanos)
+            val diff = StateDiff.packets(shadow, scratch.shadow, target)
             lastDiffPackets = diff.size
             for (packet in PacketCodec.encodeAll(diff, target)) deliver(packet, DeliveryMode.SEEK)
             segmentIndex = scratch.segmentIndex
@@ -157,6 +157,8 @@ class ReplaySession(
             if (hasTickMarkers()) worldTickNanos = scratch.worldTickNanos else alignWorldTick(target)
             shadow.localPlayer.cameraFrames.copyFrom(scratch.shadow.localPlayer.cameraFrames)
             shadow.localPlayer.cameraFrames.dropAfter(target)
+            shadow.localPlayer.history.copyFrom(scratch.shadow.localPlayer.history)
+            shadow.adoptTransients(scratch.shadow)
             primeCameraLookahead(target)
         }
         consumers.forEach { it.onSettled(target, DeliveryMode.SEEK) }
@@ -356,6 +358,20 @@ class ReplaySession(
         if (returningRespawn.dimension != currentDimension) return false
         packetIndex += 2
         return true
+    }
+
+    fun packetsBetween(fromNanos: Long, toNanos: Long, accept: (CapturedPacket) -> Boolean): List<CapturedPacket> {
+        val result = ArrayList<CapturedPacket>()
+        for (segment in source.segments) {
+            if (segment.isSnapshot || segment.endNanos < fromNanos) continue
+            if (segment.startNanos > toNanos) break
+            for (packet in source.packets(segment.index)) {
+                if (packet.timestampNanos < fromNanos || !accept(packet)) continue
+                if (packet.timestampNanos > toNanos) break
+                result += packet
+            }
+        }
+        return result
     }
 
     private fun primeCameraLookahead(target: Long) {

@@ -47,6 +47,11 @@ class ShadowClient(identity: RecorderIdentity = RecorderIdentity.UNKNOWN) : Stat
         lastNanos = 0L
     }
 
+    fun adoptTransients(other: ShadowClient) {
+        localPlayer.adoptTransients(other.localPlayer)
+        entities.forEach { id, entity -> other.entities[id]?.let { entity.adoptTransients(it) } }
+    }
+
     override fun observe(packet: CapturedPacket) = apply(packet)
 
     override fun snapshot(nanos: Long): List<CapturedPacket> = SnapshotEncoder.encode(this, nanos)
@@ -172,9 +177,27 @@ class ShadowClient(identity: RecorderIdentity = RecorderIdentity.UNKNOWN) : Stat
                 it.velocityZ = packet.velocityZ
             }
 
-            is EntityStatus -> entities[packet.entityId]?.let {
+            is EntityStatus -> if (packet.entityId == localPlayer.entityId) {
+                when (packet.status) {
+                    EntityStatus.HURT -> localPlayer.hurtAtNanos = nanos
+                    EntityStatus.DEAD -> if (localPlayer.deadAtNanos == Long.MIN_VALUE) localPlayer.deadAtNanos = nanos
+                }
+            } else entities[packet.entityId]?.let {
                 it.lastStatus = packet.status
-                if (packet.status == EntityStatus.DEAD) it.dead = true
+                when (packet.status) {
+                    EntityStatus.HURT -> it.hurtAtNanos = nanos
+                    EntityStatus.DEAD -> if (!it.dead) {
+                        it.dead = true
+                        it.deadAtNanos = nanos
+                    }
+                }
+            }
+
+            is Animation -> entities[packet.entityId]?.let {
+                when (packet.animation) {
+                    Animation.SWING_ARM -> it.swingAtNanos = nanos
+                    Animation.TAKE_DAMAGE -> it.hurtAtNanos = nanos
+                }
             }
 
             is AttachEntity -> attach(packet)
@@ -240,8 +263,17 @@ class ShadowClient(identity: RecorderIdentity = RecorderIdentity.UNKNOWN) : Stat
                 localPlayer.xpTotal = packet.total
             }
 
-            is HeldItemChange -> localPlayer.heldSlot = packet.slot.coerceIn(0, 8)
-            is ClientHeldItemChange -> localPlayer.heldSlot = packet.slot.coerceIn(0, 8)
+            is HeldItemChange -> {
+                localPlayer.heldSlot = packet.slot.coerceIn(0, 8)
+                localPlayer.noteHeldItem(nanos)
+            }
+
+            is ClientHeldItemChange -> {
+                localPlayer.heldSlot = packet.slot.coerceIn(0, 8)
+                localPlayer.noteHeldItem(nanos)
+            }
+
+            ClientArmSwing -> localPlayer.lastSwingNanos = nanos
             is PlayerAbilities -> {
                 localPlayer.abilityFlags = packet.flags
                 localPlayer.flyingSpeed = packet.flyingSpeed
@@ -260,8 +292,15 @@ class ShadowClient(identity: RecorderIdentity = RecorderIdentity.UNKNOWN) : Stat
             is WindowProperty -> localPlayer.window?.takeIf { it.id == packet.windowId }
                 ?.setProperty(packet.property, packet.value)
 
-            is SetSlot -> setSlot(packet)
-            is WindowItems -> windowItems(packet)
+            is SetSlot -> {
+                setSlot(packet)
+                localPlayer.noteHeldItem(nanos)
+            }
+
+            is WindowItems -> {
+                windowItems(packet)
+                localPlayer.noteHeldItem(nanos)
+            }
 
             is Camera -> localPlayer.cameraEntityId =
                 if (packet.cameraEntityId == localPlayer.entityId) -1 else packet.cameraEntityId

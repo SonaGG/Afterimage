@@ -33,6 +33,9 @@ class ShadowEntity(val id: Int, val kind: EntityKind, val spawnedAtNanos: Long) 
     var nbt: NbtCompound? = null
     var lastStatus: Int = -1
     var dead: Boolean = false
+    var deadAtNanos: Long = Long.MIN_VALUE
+    var hurtAtNanos: Long = Long.MIN_VALUE
+    var swingAtNanos: Long = Long.MIN_VALUE
 
     val metadata = IntObjectMap<MetadataEntry>()
     val equipment = arrayOfNulls<ItemStack>(5)
@@ -48,6 +51,14 @@ class ShadowEntity(val id: Int, val kind: EntityKind, val spawnedAtNanos: Long) 
     val headYawDegrees: Float get() = Protocol.fromAngle(headYaw)
 
     val isPlayer: Boolean get() = kind == EntityKind.PLAYER
+
+    fun visibleAt(nanos: Long): Boolean = !dead || nanos - deadAtNanos < DEATH_ANIMATION_NANOS
+
+    fun adoptTransients(other: ShadowEntity) {
+        deadAtNanos = other.deadAtNanos
+        hurtAtNanos = other.hurtAtNanos
+        swingAtNanos = other.swingAtNanos
+    }
 
     fun mergeMetadata(entries: List<MetadataEntry>) {
         for (entry in entries) metadata.put(entry.index, entry)
@@ -110,4 +121,9 @@ class ShadowEntity(val id: Int, val kind: EntityKind, val spawnedAtNanos: Long) 
     fun pose(): Pose = Pose(x, y, z, yawDegrees, pitchDegrees, headYawDegrees)
 
     fun poseAt(nanos: Long, interpolation: Interpolation): Pose = interpolation.poseAt(history, nanos) ?: pose()
+
+    companion object {
+        const val DEATH_ANIMATION_TICKS = 20
+        const val DEATH_ANIMATION_NANOS = DEATH_ANIMATION_TICKS * 50_000_000L
+    }
 }

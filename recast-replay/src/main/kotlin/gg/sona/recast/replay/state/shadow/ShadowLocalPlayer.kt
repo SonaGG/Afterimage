@@ -2,6 +2,7 @@ package gg.sona.recast.replay.state.shadow
 
 import gg.sona.recast.core.collect.IntObjectMap
 import gg.sona.recast.protocol.*
+import gg.sona.recast.replay.state.diff.StateDiff
 import gg.sona.recast.replay.state.camera.CameraSamples
 import gg.sona.recast.replay.state.interpolation.Interpolation
 import java.util.*
@@ -39,6 +40,14 @@ class ShadowLocalPlayer {
     var screen: LocalScreen = LocalScreen.CLOSED
     var target: LocalTarget? = null
     var reducedDebugInfo: Boolean = false
+    var lastSwingNanos: Long = Long.MIN_VALUE
+    var hurtAtNanos: Long = Long.MIN_VALUE
+    var deadAtNanos: Long = Long.MIN_VALUE
+    var heldChangedAtNanos: Long = Long.MIN_VALUE
+        private set
+    var heldBefore: ItemStack = ItemStack.EMPTY
+        private set
+    private var heldSeen: ItemStack? = null
 
     val inventory = Array(INVENTORY_SIZE) { ItemStack.EMPTY }
     val metadata = IntObjectMap<MetadataEntry>()
@@ -91,6 +100,24 @@ class ShadowLocalPlayer {
         history.rotations.push(nanos, yaw.toDouble(), pitch.toDouble(), yaw.toDouble())
     }
 
+    fun noteHeldItem(nanos: Long) {
+        val held = heldItem
+        val seen = heldSeen
+        heldSeen = held
+        if (seen == null || StateDiff.sameItem(seen, held)) return
+        heldBefore = seen
+        heldChangedAtNanos = nanos
+    }
+
+    fun adoptTransients(other: ShadowLocalPlayer) {
+        lastSwingNanos = other.lastSwingNanos
+        hurtAtNanos = other.hurtAtNanos
+        deadAtNanos = other.deadAtNanos
+        heldChangedAtNanos = other.heldChangedAtNanos
+        heldBefore = other.heldBefore
+        heldSeen = other.heldSeen
+    }
+
     fun pose(): Pose = Pose(x, y, z, yaw, pitch, yaw)
 
     fun poseAt(nanos: Long, interpolation: Interpolation): Pose = interpolation.poseAt(history, nanos) ?: pose()
@@ -121,6 +148,7 @@ class ShadowLocalPlayer {
         sprinting = false
         vehicleId = -1
         cameraEntityId = -1
+        deadAtNanos = Long.MIN_VALUE
         effects.clear()
     }
 
@@ -144,6 +172,11 @@ class ShadowLocalPlayer {
         food = 20
         saturation = 5f
         metadata.clear()
+        lastSwingNanos = Long.MIN_VALUE
+        hurtAtNanos = Long.MIN_VALUE
+        heldChangedAtNanos = Long.MIN_VALUE
+        heldBefore = ItemStack.EMPTY
+        heldSeen = null
         resetForRespawn()
     }
 

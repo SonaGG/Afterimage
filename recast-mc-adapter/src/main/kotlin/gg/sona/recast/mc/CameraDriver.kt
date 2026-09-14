@@ -7,7 +7,10 @@ import gg.sona.recast.core.time.Nanos
 import gg.sona.recast.editor.ViewState
 import gg.sona.recast.editor.host.CameraControl
 import gg.sona.recast.protocol.LocalScreen
+import gg.sona.recast.mc.mixin.ItemInHandRendererAccessor
+import gg.sona.recast.replay.perspective.ProjectionOptions
 import gg.sona.recast.replay.session.ReplaySession
+import gg.sona.recast.replay.state.shadow.HandState
 import gg.sona.recast.replay.state.interpolation.CatmullRomInterpolation
 import gg.sona.recast.replay.state.interpolation.Interpolation
 import gg.sona.recast.replay.state.interpolation.LinearInterpolation
@@ -396,8 +399,25 @@ class CameraDriver(private val minecraft: Minecraft, picker: ViewportPicker) : C
         if (exportPose != null || previewPose != null) return true
         if (!detachedFromPlayer()) return false
         if (settings.mode != CameraMode.FIRST_PERSON || !settings.showHand) return true
-        if (settings.targetsRecorder()) return false
+        if (settings.targetsRecorder()) return session?.shadow?.localPlayer?.gameMode == ProjectionOptions.SPECTATOR
         return handTarget() == null
+    }
+
+    fun onSeeked(replay: ReplaySession) {
+        if (settings.mode != CameraMode.FIRST_PERSON || !settings.targetsRecorder()) return
+        val player = minecraft.player ?: return
+        val state = HandState.at(replay.shadow.localPlayer, replay.positionNanos, replay.lastTickNanos)
+        player.easedYaw = state.easedYaw
+        player.easedPitch = state.easedPitch
+        player.lastEasedYaw = state.lastEasedYaw
+        player.lastEasedPitch = state.lastEasedPitch
+        SeekRestorer.applySwing(player, state.swing)
+        val renderer = minecraft.gameRenderer.itemInHandRenderer as ItemInHandRendererAccessor
+        renderer.`recast$setHandHeight`(state.handHeight)
+        renderer.`recast$setLastHandHeight`(state.lastHandHeight)
+        val previous = state.previousItem
+        renderer.`recast$setItemInHand`(if (previous != null) ItemStacks.toMinecraft(previous) else player.inventory.selectedItem)
+        renderer.`recast$setSelectedSlot`(player.inventory.selectedSlot)
     }
 
     private fun placeExactRecorderView(replay: ReplaySession): Boolean {

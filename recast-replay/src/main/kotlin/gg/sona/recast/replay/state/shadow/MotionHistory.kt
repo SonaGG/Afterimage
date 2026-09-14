@@ -8,4 +8,9 @@ class MotionHistory(capacity: Int = 16) {
         positions.clear()
         rotations.clear()
     }
+
+    fun copyFrom(other: MotionHistory) {
+        positions.copyFrom(other.positions)
+        rotations.copyFrom(other.rotations)
+    }
 }

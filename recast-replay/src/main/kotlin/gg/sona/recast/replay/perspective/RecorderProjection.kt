@@ -98,11 +98,10 @@ class RecorderProjection(
             ClientboundPlay.RESPAWN -> {
                 val respawn = PacketCodec.decode(packet) as? Respawn ?: return
                 if (respawn.dimension != dimension) {
-                    recorderSpawned = false
                     pending.clear()
-                    lastEquipment.fill(null)
                     footsteps.reset()
                 }
+                recorderSpawned = false
                 dimension = respawn.dimension
                 cameraPlaced = false
                 emit(respawn.copy(gameMode = options.cameraGameMode), packet, mode)
@@ -272,7 +271,7 @@ class RecorderProjection(
 
             ClientboundPlay.ENTITY_METADATA -> {
                 val metadata = PacketCodec.decode(packet) as? EntityMetadata ?: return
-                val entries = metadata.metadata.filter { it.index in ProjectionOptions.HUD_METADATA_INDEXES }
+                val entries = ProjectionOptions.cameraMetadata(metadata.metadata)
                 if (entries.isNotEmpty()) emit(EntityMetadata(options.cameraEntityId, entries), packet, mode)
             }
         }
@@ -322,13 +321,10 @@ class RecorderProjection(
                 syncEquipment(packet, mode)
             }
 
-            is LocalBlockBreak -> if (recorderSpawned) emit(
-                BlockBreakAnimation(
-                    recorderEntityId,
-                    decoded.position,
-                    decoded.stage
-                ), packet, mode
-            )
+            is LocalBlockBreak -> if (recorderSpawned) {
+                emit(BlockBreakAnimation(recorderEntityId, decoded.position, decoded.stage), packet, mode)
+                forward(packet, mode)
+            }
 
             is LocalBlockChange -> emit(BlockChange(decoded.position, decoded.state), packet, mode)
 
@@ -456,6 +452,10 @@ class RecorderProjection(
                     effect.hideParticles
                 ), reference, mode
             )
+        }
+        if (options.mirrorHud) {
+            val entries = ProjectionOptions.cameraMetadata(player.entityMetadata())
+            if (entries.isNotEmpty()) emit(EntityMetadata(options.cameraEntityId, entries), reference, mode)
         }
         if (!listed) emit(PlayerListItem(PlayerListItem.REMOVE_PLAYER, listOf(profile)), reference, mode)
     }

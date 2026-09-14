@@ -14,7 +14,7 @@ object StateDiff {
     fun canDiff(from: ShadowClient, to: ShadowClient): Boolean =
         from.joined && to.joined && from.world.dimension == to.world.dimension && from.localPlayer.entityId == to.localPlayer.entityId
 
-    fun packets(from: ShadowClient, to: ShadowClient, nanos: Long, fromNanos: Long = from.lastNanos): List<PlayPacket> {
+    fun packets(from: ShadowClient, to: ShadowClient, nanos: Long): List<PlayPacket> {
         val out = ArrayList<ClientboundPacket>(64)
         if (from.resourcePack != to.resourcePack) to.resourcePack?.let { out += ResourcePackSend(it.url, it.hash) }
         diffPlayerList(from, to, out)
@@ -197,11 +197,14 @@ object StateDiff {
 
     private fun diffEntities(from: ShadowClient, to: ShadowClient, nanos: Long, out: MutableList<ClientboundPacket>) {
         val removed = ArrayList<Int>()
-        from.entities.forEach { id, _ -> if (to.entities[id] == null) removed += id }
+        from.entities.forEach { id, previous ->
+            if (to.entities[id]?.visibleAt(nanos) != true || !previous.visibleAt(from.lastNanos)) removed += id
+        }
         val respawned = ArrayList<ShadowEntity>()
         val updated = ArrayList<Pair<ShadowEntity, ShadowEntity>>()
         to.entities.forEach { id, entity ->
-            val previous = from.entities[id]
+            if (!entity.visibleAt(nanos)) return@forEach
+            val previous = from.entities[id]?.takeIf { it.visibleAt(from.lastNanos) }
             when {
                 previous == null -> respawned += entity
                 previous.kind != entity.kind || previous.type != entity.type || previous.uuid != entity.uuid || (previous.dead && !entity.dead) -> {

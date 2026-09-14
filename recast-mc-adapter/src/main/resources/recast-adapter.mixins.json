@@ -31,6 +31,7 @@
     "GameRendererMixin",
     "HumanoidModelMixin",
     "InventoryMenuScreenMixin",
+    "ItemInHandRendererAccessor",
     "ItemInHandRendererMixin",
     "ItemRendererMixin",
     "LivingEntityAccessor",

@@ -11,6 +11,7 @@ import gg.sona.recast.protocol.*
 import gg.sona.recast.replay.consumer.DeliveryMode
 import gg.sona.recast.replay.consumer.ReplayConsumer
 import gg.sona.recast.replay.consumer.ResetReason
+import gg.sona.recast.replay.perspective.TransientPackets
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
 import io.netty.channel.ChannelHandlerContext
@@ -25,6 +26,8 @@ import net.minecraft.client.network.handler.ClientPlayNetworkHandler
 import net.minecraft.entity.living.LivingEntity
 import net.minecraft.network.*
 import net.minecraft.text.Text
+import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.Direction
 import org.apache.logging.log4j.LogManager
 import java.util.*
 
@@ -79,6 +82,7 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
     }
 
     var timeOverride: () -> Long? = { null }
+    var targetFace: () -> Int = { -1 }
     var profileLookup: (UUID) -> PlayerListEntry? = { null }
 
     @Volatile
@@ -104,10 +108,12 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
     override fun onPacket(packet: CapturedPacket, mode: DeliveryMode) {
         val channel = channel ?: return
         if (packet.packetId == RecastInternal.OVERLAY_RESET) {
-            val reset = PacketCodec.decode(packet) as? OverlayReset ?: return
-            if (reset.resetsChat) resetChat(reset)
-            if (reset.resetsTitle) resetTitle(reset.titleAgeNanos)
-            if (reset.resetsActionBar) resetActionBar(reset.actionBarAgeNanos)
+            (PacketCodec.decode(packet) as? OverlayReset)?.let { applyOverlayReset(it) }
+            return
+        }
+        if (mode == DeliveryMode.SEEK && TransientPackets.isTransient(packet)) return
+        if (packet.packetId == RecastInternal.LOCAL_BLOCK_BREAK) {
+            (PacketCodec.decode(packet) as? LocalBlockBreak)?.let { addMiningParticles(it, packet.timestampNanos) }
             return
         }
         var payload = packet.payload
@@ -208,7 +214,32 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
         buffer.writeBytes(encoded.payload)
         runCatching {
             channel.pipeline().fireChannelRead(buffer)
-        }.onFailure { LOGGER.warn("Recast replay could not deliver a scoreboard fix-up", it) }
+        }.onFailure { LOGGER.warn("Recast replay could not deliver {}", decoded, it) }
+    }
+
+    fun replayEvent(packet: CapturedPacket) = onPacket(packet, DeliveryMode.LIVE)
+
+    fun syncOverlays(packets: List<PlayPacket>, nanos: Long) {
+        for (packet in packets) {
+            when (packet) {
+                is OverlayReset -> applyOverlayReset(packet)
+                is ClientboundPacket -> deliverDecoded(packet, nanos)
+                else -> Unit
+            }
+        }
+    }
+
+    private fun applyOverlayReset(reset: OverlayReset) {
+        if (reset.resetsChat) resetChat(reset)
+        if (reset.resetsTitle) resetTitle(reset.titleAgeNanos)
+        if (reset.resetsActionBar) resetActionBar(reset.actionBarAgeNanos)
+    }
+
+    private fun addMiningParticles(packet: LocalBlockBreak, nanos: Long) {
+        if (minecraft.world == null) return
+        RecastHooks.reseedForPacket(nanos)
+        val face = targetFace().takeIf { it in 0..5 } ?: UP_FACE
+        minecraft.particleManager.addBlockMiningParticles(BlockPos.fromLong(packet.position), Direction.byId(face))
     }
 
     private fun resetChat(reset: OverlayReset) {
@@ -313,6 +344,7 @@ class VirtualConnection(private val minecraft: Minecraft, private val profile: G
     companion object {
         private const val LOG_FAILURES = 8L
         private const val ACTION_BAR_TICKS = 60
+        private const val UP_FACE = 1
         private const val DROP_OUTBOUND = "recast_drop_outbound"
         private const val DECODER = "decoder"
         private const val ENCODER = "encoder"
