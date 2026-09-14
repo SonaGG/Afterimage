@@ -469,7 +469,8 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
             presetsDirty = false
         }
         val names = presetNames ?: emptyList()
-        ImGui.setNextItemWidth(-EditorFonts.px(70f))
+        val saveWidth = Widgets.buttonWidth("Save##path", Widgets.ButtonStyle.ACCENT)
+        ImGui.setNextItemWidth(-(saveWidth + ImGui.getStyle().itemSpacingX))
         if (ImGui.inputTextWithHint(
                 "##presetname",
                 "Name",
@@ -480,7 +481,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
         ImGui.sameLine()
         val canSave = !session.project.camera.isEmpty && presetName.get().isNotBlank()
         if (!canSave) ImGui.beginDisabled()
-        if (Widgets.accentButton("Save##path", EditorFonts.px(64f))) savePreset(session, store)
+        if (Widgets.accentButton("Save##path")) savePreset(session, store)
         if (!canSave) ImGui.endDisabled()
         if (names.isEmpty()) {
             Widgets.smallText("No saved paths yet.", EditorTheme.TEXT_DIM.u32)
@@ -491,7 +492,8 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
             try {
                 ImGui.alignTextToFramePadding()
                 ImGui.textUnformatted(name)
-                ImGui.sameLine(ImGui.getContentRegionAvailX() - EditorFonts.px(56f))
+                ImGui.sameLine()
+                Widgets.rightAlign(ImGui.getFrameHeight(), ImGui.getFrameHeight(), spacing = ImGui.getStyle().itemSpacingX)
                 if (Widgets.iconButton("load", Icon.FOLDER, ImGui.getFrameHeight(), "Load this path")) {
                     val loaded = store.load(name)
                     if (loaded != null) {

@@ -128,10 +128,9 @@ class ExportView(private val context: EditorContext) {
         val stage = waiting ?: handle?.detail?.takeIf { it.isNotBlank() } ?: "starting"
         Widgets.smallText(stage, if (waiting != null) EditorTheme.WARNING.u32 else EditorTheme.TEXT_MUTED.u32)
         ImGui.dummy(0f, EditorFonts.px(8f))
-        val buttonWidth = EditorFonts.px(160f)
-        ImGui.setCursorPosX(x + cardWidth - pad - buttonWidth)
+        ImGui.setCursorPosX(x + cardWidth - pad - Widgets.buttonWidth("Cancel export  (Esc)", Widgets.ButtonStyle.DANGER))
         if (cancelling) ImGui.beginDisabled()
-        if (Widgets.dangerButton("Cancel export  (Esc)", buttonWidth)) handle?.cancel()
+        if (Widgets.dangerButton("Cancel export  (Esc)")) handle?.cancel()
         if (cancelling) ImGui.endDisabled()
         ImGui.endGroup()
         val queued = context.exports?.queue()?.handles()?.count { it.state == ExportState.QUEUED } ?: 0

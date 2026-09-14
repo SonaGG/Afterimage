@@ -236,10 +236,8 @@ class Dialog(val title: String, val icon: Icon, private val width: Float, privat
         val HEADER_HEIGHT: Float get() = EditorFonts.px(54f)
         val FOOTER_HEIGHT: Float get() = EditorFonts.px(58f)
 
-        fun rightAlign(vararg widths: Float, spacing: Float = EditorFonts.px(8f)) {
-            val total = widths.sum() + spacing * (widths.size - 1).coerceAtLeast(0)
-            ImGui.setCursorPosX(ImGui.getCursorPosX() + (ImGui.getContentRegionAvailX() - total).coerceAtLeast(0f))
-        }
+        fun rightAlign(vararg widths: Float, spacing: Float = EditorFonts.px(8f)) =
+            Widgets.rightAlign(*widths, spacing = spacing)
 
         fun confirm(
             title: String,
@@ -279,7 +277,11 @@ class Dialog(val title: String, val icon: Icon, private val width: Float, privat
                 Widgets.mutedText(body)
                 ImGui.popTextWrapPos()
                 ImGui.dummy(0f, EditorFonts.px(12f))
-                val buttonWidth = EditorFonts.px(110f)
+                val buttonWidth = maxOf(
+                    EditorFonts.px(96f),
+                    Widgets.buttonWidth("Cancel"),
+                    Widgets.buttonWidth(confirmLabel, if (danger) Widgets.ButtonStyle.DANGER else Widgets.ButtonStyle.ACCENT)
+                )
                 rightAlign(buttonWidth, buttonWidth)
                 val escape = ImGui.isKeyPressed(
                     ImGuiKey.Escape,

@@ -135,16 +135,20 @@ class ExportPanel(private val context: EditorContext) :
             format.needsFfmpeg && !backend.ffmpegAvailable -> "Download ffmpeg to export video"
             else -> null
         }
+        val spacing = EditorFonts.px(8f)
+        val more = ImGui.getFrameHeight() + EditorFonts.px(6f)
+        val screenshot = Widgets.buttonWidth("Screenshot", Widgets.ButtonStyle.GHOST)
+        val draft = Widgets.buttonWidth("Draft", Widgets.ButtonStyle.GHOST)
+        val start = Widgets.buttonWidth("Start export", Widgets.ButtonStyle.ACCENT)
         if (hint != null) {
-            ImGui.alignTextToFramePadding()
-            Widgets.smallText(hint, EditorTheme.TEXT_DIM.u32)
+            val room = ImGui.getContentRegionAvailX() - (more + screenshot + draft + start + spacing * 3f) - EditorFonts.px(16f)
+            if (room > EditorFonts.px(48f)) {
+                ImGui.alignTextToFramePadding()
+                Widgets.smallText(EditorFonts.with(EditorFonts.small) { Widgets.clip(hint, room) }, EditorTheme.TEXT_DIM.u32)
+                ImGui.sameLine()
+            }
         }
-        ImGui.sameLine()
-        val more = EditorFonts.px(30f)
-        val screenshot = EditorFonts.px(118f)
-        val draft = EditorFonts.px(84f)
-        val start = EditorFonts.px(134f)
-        Dialog.rightAlign(more, screenshot, draft, start)
+        Widgets.rightAlign(more, screenshot, draft, start, spacing = spacing)
         if (Widgets.iconButton(
                 "export-more",
                 Icon.MORE,
@@ -162,20 +166,20 @@ class ExportPanel(private val context: EditorContext) :
             if (ImGui.menuItem("Render POV proxy")) renderProxy()
             ImGui.endPopup()
         }
-        ImGui.sameLine(0f, EditorFonts.px(8f))
+        ImGui.sameLine(0f, spacing)
         if (!ready) ImGui.beginDisabled()
-        if (Widgets.ghostButton("Screenshot", screenshot) && session != null) screenshot(backend, session)
+        if (Widgets.ghostButton("Screenshot") && session != null) screenshot(backend, session)
         Widgets.tooltip("Render the current frame at the export resolution as a PNG (supersampling and projection apply)  F2")
-        ImGui.sameLine(0f, EditorFonts.px(8f))
-        if (Widgets.ghostButton("Draft", draft) && session != null) start(backend, session, draft = true)
+        ImGui.sameLine(0f, spacing)
+        if (Widgets.ghostButton("Draft") && session != null) start(backend, session, draft = true)
         Widgets.tooltip("Quick low-resolution preview render at half size and 30 fps")
-        ImGui.sameLine(0f, EditorFonts.px(8f))
+        ImGui.sameLine(0f, spacing)
         val io = ImGui.getIO()
         val hotkey = ready && !io.wantTextInput && (ImGui.isKeyPressed(
             ImGuiKey.Enter,
             false
         ) || ImGui.isKeyPressed(ImGuiKey.KeypadEnter, false) || (io.keyCtrl && ImGui.isKeyPressed(ImGuiKey.E, false)))
-        if ((Widgets.accentButton("Start export", start) || hotkey) && session != null) start(
+        if ((Widgets.accentButton("Start export") || hotkey) && session != null) start(
             backend,
             session,
             draft = false
@@ -215,17 +219,23 @@ class ExportPanel(private val context: EditorContext) :
                 Widgets.intDrag("##customh", height, 8f, 16, 7680, "%d px")?.let { height = it and 1.inv() }
             }
             Widgets.property("Frame rate")
-            Widgets.segmented("fps", FPS.map { it.toString() }, FPS.indexOf(fps), 0f)?.let {
+            val custom = fps !in FPS
+            val trailing = if (custom) EditorFonts.px(90f) else ImGui.getFrameHeight()
+            Widgets.segmented(
+                "fps",
+                FPS.map { it.toString() },
+                FPS.indexOf(fps),
+                0f,
+                reserve = trailing + ImGui.getStyle().itemSpacingX
+            )?.let {
                 fps = FPS[it]
                 context.timeline.renderFps = fps
             }
-            if (fps !in FPS) {
-                ImGui.sameLine()
+            ImGui.sameLine()
+            if (custom) {
+                ImGui.setNextItemWidth(trailing)
                 Widgets.intDrag("##customfps", fps, 0.2f, 1, 240, "%d fps")?.let { fps = it }
-            } else {
-                ImGui.sameLine()
-                if (Widgets.iconButton("fps-custom", Icon.EDIT, ImGui.getFrameHeight(), "Custom frame rate")) fps = 48
-            }
+            } else if (Widgets.iconButton("fps-custom", Icon.EDIT, trailing, "Custom frame rate")) fps = 48
             Widgets.property("Range")
             val ranges = Range.entries
             Widgets.segmented("range", ranges.map { it.label }, ranges.indexOf(range), 0f)?.let { range = ranges[it] }
@@ -565,8 +575,8 @@ class ExportPanel(private val context: EditorContext) :
         ImGui.dummy(0f, EditorFonts.px(2f))
         if (ImGui.beginTable("saved-presets", 3, ImGuiTableFlags.RowBg or ImGuiTableFlags.BordersInnerH)) {
             ImGui.tableSetupColumn("name", ImGuiTableColumnFlags.WidthStretch)
-            ImGui.tableSetupColumn("load", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(70f))
-            ImGui.tableSetupColumn("delete", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(30f))
+            ImGui.tableSetupColumn("load", ImGuiTableColumnFlags.WidthFixed, Widgets.buttonWidth("Load", Widgets.ButtonStyle.GHOST))
+            ImGui.tableSetupColumn("delete", ImGuiTableColumnFlags.WidthFixed, ImGui.getFrameHeight())
             for (saved in stored) {
                 ImGui.pushID(saved)
                 try {
@@ -575,7 +585,7 @@ class ExportPanel(private val context: EditorContext) :
                     ImGui.alignTextToFramePadding()
                     ImGui.textUnformatted(saved)
                     ImGui.tableNextColumn()
-                    if (Widgets.ghostButton("Load", EditorFonts.px(64f))) {
+                    if (Widgets.ghostButton("Load")) {
                         context.host.preference("export.preset." + key(saved))?.let { loadPreset(it) }
                         presetName.set(saved)
                         context.status("Loaded export preset $saved")
@@ -969,12 +979,8 @@ class ExportPanel(private val context: EditorContext) :
             return
         }
         if (handles.any { it.state == ExportState.DONE || it.state == ExportState.FAILED || it.state == ExportState.CANCELLED }) {
-            Dialog.rightAlign(EditorFonts.px(92f))
-            if (Widgets.ghostButton(
-                    "Clear done",
-                    EditorFonts.px(92f)
-                )
-            ) handles.filter { it.state != ExportState.RUNNING && it.state != ExportState.QUEUED }
+            Widgets.rightAlign(Widgets.buttonWidth("Clear done", Widgets.ButtonStyle.GHOST))
+            if (Widgets.ghostButton("Clear done")) handles.filter { it.state != ExportState.RUNNING && it.state != ExportState.QUEUED }
                 .forEach { backend.queue().forget(it.id) }
         }
         for (handle in handles.sortedByDescending { it.startedAtNanos }) {
@@ -1019,19 +1025,15 @@ class ExportPanel(private val context: EditorContext) :
             }
 
             ExportState.DONE -> handle.result?.let { path ->
-                Widgets.smallText(path.fileName.toString(), EditorTheme.TEXT_DIM.u32)
-                ImGui.sameLine()
-                singleImage(path)?.let { image ->
-                    if (Widgets.smallButton("Copy image")) copyImage(image)
-                    ImGui.sameLine()
-                }
-                if (!Files.isDirectory(path) && Widgets.smallButton("Play")) play(path)
-                if (!Files.isDirectory(path)) ImGui.sameLine()
-                if (Widgets.smallButton("Open folder")) openFolder(path)
-                ImGui.sameLine()
-                if (Widgets.smallButton("Copy path")) ImGui.setClipboardText(path.toAbsolutePath().toString())
-                ImGui.sameLine()
-                if (Widgets.smallButton("Clear")) backend.queue().forget(handle.id)
+                Widgets.smallText(path.fileName.toString(), EditorTheme.TEXT_DIM.u32, clipToWidth = true)
+                val image = singleImage(path)
+                val actions = ArrayList<Pair<String, () -> Unit>>(5)
+                if (image != null) actions += "Copy image" to { copyImage(image) }
+                if (!Files.isDirectory(path)) actions += "Play" to { play(path) }
+                actions += "Open folder" to { openFolder(path) }
+                actions += "Copy path" to { ImGui.setClipboardText(path.toAbsolutePath().toString()) }
+                actions += "Clear" to { backend.queue().forget(handle.id) }
+                Widgets.smallButtons(actions)
             }
 
             ExportState.FAILED -> {

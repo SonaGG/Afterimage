@@ -150,10 +150,10 @@ class SequencePanel(private val context: EditorContext) :
         if (session.project.sequenceStale) Widgets.pill("changed    rebuild to apply", EditorTheme.WARNING)
         else Widgets.smallText("${session.project.segments.size} segments", EditorTheme.TEXT_DIM.u32)
         ImGui.sameLine()
-        val width = EditorFonts.px(170f)
-        Dialog.rightAlign(width)
+        val label = if (building) "Building..." else "Rebuild sequence"
+        Widgets.rightAlign(Widgets.buttonWidth(label, Widgets.ButtonStyle.ACCENT))
         if (building) ImGui.beginDisabled()
-        if (Widgets.accentButton(if (building) "Building..." else "Rebuild sequence", width)) {
+        if (Widgets.accentButton(label)) {
             if (!context.host.replay.rebuildSequence()) context.status("Nothing to rebuild: add a second segment or trim one first")
         }
         if (building) ImGui.endDisabled()

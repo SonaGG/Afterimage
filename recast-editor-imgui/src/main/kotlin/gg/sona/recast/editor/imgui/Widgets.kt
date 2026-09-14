@@ -93,6 +93,19 @@ object Widgets {
         return pressed
     }
 
+    fun smallButtons(actions: List<Pair<String, () -> Unit>>) {
+        EditorTheme.pushCompactFrame()
+        try {
+            for ((index, action) in actions.withIndex()) {
+                val (label, run) = action
+                if (index > 0) ImGui.sameLine()
+                if (ghostButton(label)) run()
+            }
+        } finally {
+            ImGui.popStyleVar()
+        }
+    }
+
     fun progress(fraction: Float, width: Float = -1f, label: String = "") {
         val actual = if (width > 0f) width else ImGui.getContentRegionAvailX() + minOf(0f, width)
         val height = EditorFonts.px(6f)
@@ -319,50 +332,60 @@ object Widgets {
 
     fun button(label: String, width: Float = 0f): Boolean = styledButton(label, width, 0f, ButtonStyle.NORMAL)
 
-    private fun styledButton(label: String, width: Float, height: Float, style: ButtonStyle): Boolean {
-        val icon = iconFor(label)
-        if (icon != null) return iconLabelButton(
-            "##btn-$label",
-            icon,
-            label.substringBefore("##"),
-            width,
-            style,
-            height = height
-        )
-        val frameHeight = if (height > 0f) height else ImGui.getFrameHeight()
-        val text = label.substringBefore("##")
-        val actual =
-            if (width > 0f) width else if (width < 0f) ImGui.getContentRegionAvailX() + width else textWidth(text) + ImGui.getStyle().framePaddingX * 2f + EditorFonts.px(
-                8f
-            )
+    private fun styledButton(label: String, width: Float, height: Float, style: ButtonStyle): Boolean =
+        iconLabelButton(label, iconFor(label), label.substringBefore("##"), width, style, height = height)
+
+    private fun buttonFont(style: ButtonStyle): ImFont =
+        if (style == ButtonStyle.ACCENT) EditorFonts.bodyMedium else EditorFonts.body
+
+    private fun buttonIconSize(): Float = ImGui.getFontSize() * 0.95f
+
+    private fun buttonPadding(): Float = ImGui.getStyle().framePaddingX + EditorFonts.px(4f)
+
+    fun buttonWidth(label: String, style: ButtonStyle = ButtonStyle.NORMAL): Float =
+        buttonWidth(iconFor(label), label.substringBefore("##"), style)
+
+    fun buttonWidth(icon: Icon?, text: String, style: ButtonStyle = ButtonStyle.NORMAL): Float {
+        val textWidth = if (text.isEmpty()) 0f else EditorFonts.with(buttonFont(style)) { textWidth(text) }
+        val iconWidth = if (icon == null) 0f else buttonIconSize() + (if (text.isEmpty()) 0f else BUTTON_ICON_GAP)
+        return iconWidth + textWidth + buttonPadding() * 2f
+    }
+
+    private fun wrapIfNeeded(width: Float) {
+        if (width <= ImGui.getContentRegionAvailX() + 1f) return
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
-        val pressed = ImGui.invisibleButton(label, actual, frameHeight)
-        val hovered = ImGui.isItemHovered()
-        val held = ImGui.isItemActive()
-        val list = ImGui.getWindowDrawList()
-        val background = background(style, hovered, held, true)
-        if (background != 0) list.addRectFilled(
-            x,
-            y,
-            x + actual,
-            y + frameHeight,
-            background,
-            ImGui.getStyle().frameRounding
-        )
-        val tint =
-            if (style == ButtonStyle.ACCENT || style == ButtonStyle.DANGER) 0xFFFFFFFF.toInt() else EditorTheme.TEXT.u32
-        val font = if (style == ButtonStyle.ACCENT) EditorFonts.bodyMedium else EditorFonts.body
-        val textWidth = EditorFonts.with(font) { textWidth(text) }
-        list.addText(
-            font,
-            ImGui.getFontSize().toInt(),
-            x + (actual - textWidth) / 2f,
-            y + (frameHeight - ImGui.getFontSize()) / 2f,
-            tint,
-            text
-        )
-        return pressed
+        val previousTop = ImGui.getItemRectMinY() - y
+        val previousRight = x - ImGui.getItemRectMaxX()
+        val continues = previousTop > -0.5f && previousTop < EditorFonts.px(12f) &&
+                previousRight > -0.5f && previousRight < EditorFonts.px(32f)
+        if (continues) ImGui.newLine()
+    }
+
+    fun rightAlign(vararg widths: Float, spacing: Float = EditorFonts.px(8f)) {
+        val total = widths.sum() + spacing * (widths.size - 1).coerceAtLeast(0)
+        ImGui.setCursorPosX(ImGui.getCursorPosX() + (ImGui.getContentRegionAvailX() - total).coerceAtLeast(0f))
+    }
+
+    fun lastWidth(id: String): Float = groupWidths[ImGui.getID(id)] ?: 0f
+
+    inline fun measured(id: String, block: () -> Unit): Float {
+        ImGui.beginGroup()
+        try {
+            block()
+        } finally {
+            ImGui.endGroup()
+        }
+        return remember(id, ImGui.getItemRectSizeX())
+    }
+
+    fun remember(id: String, width: Float): Float {
+        groupWidths[ImGui.getID(id)] = width
+        return width
+    }
+
+    fun centerInRow(rowTop: Float, rowHeight: Float, itemHeight: Float) {
+        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), rowTop + (rowHeight - itemHeight) / 2f)
     }
 
     private fun background(style: ButtonStyle, hovered: Boolean, held: Boolean, enabled: Boolean): Int = when (style) {
@@ -406,9 +429,9 @@ object Widgets {
         rounded: Float = EditorFonts.px(5f),
         width: Float = 0f,
     ): Boolean {
+        val actualWidth = if (width > 0f) width else size
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
-        val actualWidth = if (width > 0f) width else size
         if (!enabled) ImGui.beginDisabled()
         val pressed = ImGui.invisibleButton(id, actualWidth, size)
         if (!enabled) ImGui.endDisabled()
@@ -466,16 +489,17 @@ object Widgets {
         options: List<String>,
         selected: Int,
         itemWidth: Float = 0f,
-        tooltips: List<String>? = null
+        tooltips: List<String>? = null,
+        reserve: Float = 0f
     ): Int? {
         var result: Int? = null
         val height = ImGui.getFrameHeight()
         val pad = EditorFonts.px(2f)
         val gap = EditorFonts.px(2f)
         val widths = options.map { if (itemWidth > 0f) itemWidth else textWidth(it) + EditorFonts.px(18f) }
-        val available = ImGui.getContentRegionAvailX()
+        val available = ImGui.getContentRegionAvailX() - reserve
         val natural = widths.sum() + pad * 2f + gap * (options.size - 1)
-        if (itemWidth <= 0f && natural > available) return popupChoice(id, options, selected, tooltips)
+        if (itemWidth <= 0f && natural > available) return popupChoice(id, options, selected, tooltips, available)
         val total = if (itemWidth > 0f) natural else maxOf(natural, minOf(available, natural * 1.6f))
         val scale = if (itemWidth > 0f) 1f else (total - pad * 2f - gap * (options.size - 1)) / widths.sum()
         val x = ImGui.getCursorScreenPosX()
@@ -779,6 +803,7 @@ object Widgets {
         ImGui.popStyleColor()
         if (tooltipText != null) tooltip(tooltipText)
         ImGui.tableSetColumnIndex(1)
+        ImGui.alignTextToFramePadding()
         ImGui.setNextItemWidth(-1f)
     }
 
@@ -893,7 +918,7 @@ object Widgets {
 
     fun iconLabelButton(
         id: String,
-        icon: Icon,
+        icon: Icon?,
         label: String,
         width: Float = 0f,
         style: ButtonStyle = ButtonStyle.NORMAL,
@@ -902,13 +927,14 @@ object Widgets {
         height: Float = 0f
     ): Boolean {
         val frameHeight = if (height > 0f) height else ImGui.getFrameHeight()
-        val iconSize = ImGui.getFontSize() * 0.95f
-        val gap = EditorFonts.px(6f)
-        val font = if (style == ButtonStyle.ACCENT) EditorFonts.bodyMedium else EditorFonts.body
-        val labelWidth = EditorFonts.with(font) { textWidth(label) }
-        val padding = ImGui.getStyle().framePaddingX + EditorFonts.px(3f)
+        val iconSize = buttonIconSize()
+        val gap = if (icon == null || label.isEmpty()) 0f else BUTTON_ICON_GAP
+        val font = buttonFont(style)
+        val labelWidth = if (label.isEmpty()) 0f else EditorFonts.with(font) { textWidth(label) }
+        val natural = buttonWidth(icon, label, style)
         val actual =
-            if (width > 0f) width else if (width < 0f) ImGui.getContentRegionAvailX() + width else iconSize + gap + labelWidth + padding * 2f
+            if (width > 0f) width else if (width < 0f) ImGui.getContentRegionAvailX() + width else natural
+        if (width >= 0f) wrapIfNeeded(actual)
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
         if (!enabled) ImGui.beginDisabled()
@@ -931,13 +957,13 @@ object Widgets {
             style == ButtonStyle.ACCENT || style == ButtonStyle.DANGER -> 0xFFFFFFFF.toInt()
             else -> EditorTheme.TEXT.u32
         }
-        val contentWidth = iconSize + gap + labelWidth
-        val startX = x + (actual - contentWidth) / 2f
-        Icons.draw(list, icon, startX, y + (frameHeight - iconSize) / 2f, iconSize, tint)
-        list.addText(
+        val iconWidth = if (icon == null) 0f else iconSize
+        val startX = x + (actual - (iconWidth + gap + labelWidth)) / 2f
+        if (icon != null) Icons.draw(list, icon, startX, y + (frameHeight - iconSize) / 2f, iconSize, tint)
+        if (label.isNotEmpty()) list.addText(
             font,
             ImGui.getFontSize().toInt(),
-            startX + iconSize + gap,
+            startX + iconWidth + gap,
             y + (frameHeight - ImGui.getFontSize()) / 2f,
             tint,
             label
@@ -1091,4 +1117,8 @@ object Widgets {
     fun clicked(button: Int = ImGuiMouseButton.Left): Boolean = ImGui.isItemClicked(button)
 
     private val AXIS_COLOURS = listOf(EditorTheme.AXIS_X, EditorTheme.AXIS_Y, EditorTheme.AXIS_Z)
+
+    private val groupWidths = HashMap<Int, Float>()
+
+    val BUTTON_ICON_GAP: Float get() = EditorFonts.px(6f)
 }

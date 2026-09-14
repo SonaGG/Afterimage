@@ -36,10 +36,22 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
                 )
                 val session = context.session
                 val replay = session?.replay
-                tools(top, height)
+                val rowHeight = SEGMENT
+                val rowTop = top + (height - rowHeight) / 2f
+                val left = ImGui.getWindowPosX() + EditorFonts.px(10f)
+                val right = ImGui.getWindowPosX() + viewport.workSizeX - EditorFonts.px(10f)
+                ImGui.setCursorScreenPos(left, rowTop)
+                val toolsRight = left + Widgets.measured("tools") { tools(session, rowTop, rowHeight) }
                 if (session != null && replay != null) {
-                    transport(session, replay, top, height, viewport.workSizeX)
-                    cameraModes(session, top, height, viewport.workSizeX)
+                    val gap = EditorFonts.px(16f)
+                    val modesX = right - Widgets.lastWidth("modes")
+                    val transportWidth = Widgets.lastWidth("transport")
+                    val centred = ImGui.getWindowPosX() + (viewport.workSizeX - transportWidth) / 2f
+                    val transportX = centred.coerceAtMost(modesX - gap - transportWidth).coerceAtLeast(toolsRight + gap)
+                    ImGui.setCursorScreenPos(transportX, rowTop)
+                    Widgets.measured("transport") { transport(session, replay, rowTop, rowHeight) }
+                    ImGui.setCursorScreenPos(modesX, rowTop)
+                    Widgets.measured("modes") { cameraModes(session, rowTop, rowHeight) }
                 }
             }
             ImGui.end()
@@ -49,10 +61,8 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         }
     }
 
-    private fun tools(top: Float, height: Float) {
+    private fun tools(session: EditorSession?, rowTop: Float, rowHeight: Float) {
         val button = BUTTON
-        val y = top + (height - button - EditorFonts.px(4f)) / 2f
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y)
         val tools = SceneTool.entries
         Widgets.segmentedIcons(
             "tools",
@@ -62,7 +72,6 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             button
         )?.let { context.tool = tools[it] }
         ImGui.sameLine(0f, EditorFonts.px(10f))
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y)
         Widgets.segmentedIcons(
             "space",
             listOf(Icon.CUBE, Icon.GLOBE),
@@ -71,11 +80,12 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             button
         )?.let { context.localSpace = it == 0 }
         ImGui.sameLine(0f, EditorFonts.px(10f))
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y + EditorFonts.px(2f))
+        Widgets.centerInRow(rowTop, rowHeight, button)
         val settings = context.host.camera.settings
         Widgets.iconToggle("path", Icon.PATH, settings.showPath, button, "Camera path in the scene  H")
             ?.let { settings.showPath = it }
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         Widgets.iconToggle(
             "gizmos",
             Icon.TOOL_MOVE,
@@ -85,11 +95,12 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         )
             ?.let { context.ui.sceneGizmos = it }
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         Widgets.iconToggle("pip", Icon.MONITOR, context.ui.cameraPreview, button, "Camera preview")
             ?.let { context.ui.cameraPreview = it }
-        val session = context.session
         if (session != null) {
             ImGui.sameLine(0f, EditorFonts.px(10f))
+            Widgets.centerInRow(rowTop, rowHeight, button)
             Widgets.iconToggle(
                 "autokey",
                 Icon.AUTO_KEY,
@@ -99,6 +110,7 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
                 EditorTheme.RECORD.u32
             )?.let { workspace.toggleAutoKey() }
             ImGui.sameLine()
+            Widgets.centerInRow(rowTop, rowHeight, button)
             Widgets.iconToggle(
                 "graph",
                 Icon.GRAPH,
@@ -110,25 +122,14 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         }
     }
 
-    private fun transport(session: EditorSession, replay: ReplaySession, top: Float, height: Float, width: Float) {
+    private fun transport(session: EditorSession, replay: ReplaySession, rowTop: Float, rowHeight: Float) {
         val button = BUTTON
         val play = PLAY
-        val timeText = TimeFormat.timecode(replay.positionNanos, context.timeline.renderFps)
-        val timeWidth = Widgets.tabularWidth(timeText, EditorFonts.timecode)
-        val buttons = button * 6 + play + EditorFonts.px(4f) * 6
-        val groupWidth = buttons + EditorFonts.px(18f) + timeWidth + EditorFonts.px(64f)
-        val startX = ImGui.getWindowPosX() + (width - groupWidth) / 2f
-        val y = top + (height - button) / 2f
         val frameNanos = context.timeline.frameNanos()
-        ImGui.setCursorScreenPos(startX, y)
-        if (Widgets.iconButton(
-                "t-start",
-                Icon.SKIP_START,
-                button,
-                "Jump to start  Home"
-            )
-        ) replay.seek(replay.startNanos)
+        Widgets.centerInRow(rowTop, rowHeight, button)
+        if (Widgets.iconButton("t-start", Icon.SKIP_START, button, "Jump to start  Home")) replay.seek(replay.startNanos)
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton(
                 "t-prev",
                 Icon.REWIND,
@@ -140,15 +141,10 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             if (previous != null) replay.seek(previous) else replay.seekRelative(-Nanos.ofSeconds(5))
         }
         ImGui.sameLine()
-        if (Widgets.iconButton(
-                "t-back",
-                Icon.STEP_BACK,
-                button,
-                "Previous frame  Left"
-            )
-        ) replay.seekRelative(-frameNanos)
+        Widgets.centerInRow(rowTop, rowHeight, button)
+        if (Widgets.iconButton("t-back", Icon.STEP_BACK, button, "Previous frame  Left")) replay.seekRelative(-frameNanos)
         ImGui.sameLine()
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y - (play - button) / 2f)
+        Widgets.centerInRow(rowTop, rowHeight, play)
         if (Widgets.iconButton(
                 "t-play",
                 if (replay.playing) Icon.PAUSE else Icon.PLAY,
@@ -160,9 +156,10 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             )
         ) replay.togglePlaying()
         ImGui.sameLine()
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y)
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton("t-fwd", Icon.STEP_FORWARD, button, "Next frame  Right")) replay.seekRelative(frameNanos)
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton(
                 "t-next",
                 Icon.FAST_FORWARD,
@@ -174,12 +171,11 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             if (next != null) replay.seek(next) else replay.seekRelative(Nanos.ofSeconds(5))
         }
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton("t-end", Icon.SKIP_END, button, "Jump to end  End")) replay.seek(replay.endNanos)
         ImGui.sameLine(0f, EditorFonts.px(18f))
-        ImGui.setCursorScreenPos(
-            ImGui.getCursorScreenPosX(),
-            top + (height - EditorFonts.px(15f)) / 2f - EditorFonts.px(2f)
-        )
+        Widgets.centerInRow(rowTop, rowHeight, EditorFonts.timecode.fontSize)
+        val timeText = TimeFormat.timecode(replay.positionNanos, context.timeline.renderFps)
         Widgets.tabular(timeText, EditorFonts.timecode, EditorTheme.TIMECODE.u32)
         if (ImGui.isItemHovered()) Widgets.hint(
             "${TimeFormat.clock(replay.positionNanos)} of ${TimeFormat.clock(replay.durationNanos)}   tick ${
@@ -189,7 +185,7 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             }"
         )
         ImGui.sameLine(0f, EditorFonts.px(8f))
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y)
+        Widgets.centerInRow(rowTop, rowHeight, button)
         speed(session, replay, button)
     }
 
@@ -244,46 +240,36 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
         }
     }
 
-    private fun cameraModes(session: EditorSession, top: Float, height: Float, width: Float) {
+    private fun cameraModes(session: EditorSession, rowTop: Float, rowHeight: Float) {
         val control = context.host.camera
         val settings = control.settings
         val modes = CameraMode.entries
         val button = BUTTON
-        val status = context.host.recording.status()
-        val recWidth = if (status.recording) EditorFonts.px(92f) else 0f
-        val targetLabel = if (settings.mode == CameraMode.FREE) "" else workspace.targetName(settings)
-        val targetWidth =
-            if (targetLabel.isEmpty()) 0f else EditorFonts.with(EditorFonts.small) { Widgets.textWidth(targetLabel) } + EditorFonts.px(
-                14f
-            )
-        val segmentWidth =
-            modes.size * (button + EditorFonts.px(6f)) + EditorFonts.px(4f) + EditorFonts.px(1f) * (modes.size - 1)
-        val total = segmentWidth + targetWidth + recWidth + button * 3 + EditorFonts.px(36f)
-        val x = ImGui.getWindowPosX() + width - EditorFonts.px(10f) - total
-        val y = top + (height - button - EditorFonts.px(4f)) / 2f
-        ImGui.setCursorScreenPos(x, y)
         Widgets.segmentedIcons("modes", MODE_ICONS, modes.indexOf(settings.mode), modes.map { it.label }, button)?.let {
             settings.mode = modes[it]
             control.apply()
         }
+        val targetLabel = if (settings.mode == CameraMode.FREE) "" else workspace.targetName(settings)
         if (targetLabel.isNotEmpty()) {
             ImGui.sameLine(0f, EditorFonts.px(6f))
-            ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y + EditorFonts.px(2f))
+            Widgets.centerInRow(rowTop, rowHeight, button)
+            val targetWidth = EditorFonts.with(EditorFonts.small) { Widgets.textWidth(targetLabel) } + EditorFonts.px(14f)
             val lx = ImGui.getCursorScreenPosX()
+            val ly = ImGui.getCursorScreenPosY()
             val pressed = ImGui.invisibleButton("t-target", targetWidth, button)
             val list = ImGui.getWindowDrawList()
             if (ImGui.isItemHovered()) list.addRectFilled(
                 lx,
-                y + EditorFonts.px(2f),
+                ly,
                 lx + targetWidth,
-                y + EditorFonts.px(2f) + button,
+                ly + button,
                 EditorTheme.CONTROL_HOVER.u32,
                 EditorFonts.px(5f)
             )
             EditorFonts.with(EditorFonts.small) {
                 list.addText(
                     lx + EditorFonts.px(7f),
-                    y + EditorFonts.px(2f) + (button - ImGui.getFontSize()) / 2f,
+                    ly + (button - ImGui.getFontSize()) / 2f,
                     EditorTheme.TEXT_MUTED.u32,
                     targetLabel
                 )
@@ -295,13 +281,14 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
                 ImGui.endPopup()
             }
         }
+        val status = context.host.recording.status()
         if (status.recording) {
             ImGui.sameLine(0f, EditorFonts.px(10f))
-            ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y + EditorFonts.px(2f))
+            Widgets.centerInRow(rowTop, rowHeight, ImGui.getFrameHeight())
             Widgets.pill("REC ${TimeFormat.clock(status.elapsedNanos).substringBefore('.')}", EditorTheme.RECORD)
         }
         ImGui.sameLine(0f, EditorFonts.px(10f))
-        ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), y + EditorFonts.px(2f))
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton(
                 "t-export",
                 Icon.EXPORT,
@@ -311,6 +298,7 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             )
         ) workspace.togglePanel("Export")
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton(
                 "t-settings",
                 Icon.SETTINGS,
@@ -320,12 +308,14 @@ class Toolbar(private val context: EditorContext, private val workspace: EditorW
             )
         ) workspace.togglePanel("Settings")
         ImGui.sameLine()
+        Widgets.centerInRow(rowTop, rowHeight, button)
         if (Widgets.iconButton("t-full", Icon.FULLSCREEN, button, "Fullscreen scene  Tab")) workspace.fullscreen = true
     }
 
     companion object {
         val BUTTON: Float get() = EditorFonts.px(26f)
         val PLAY: Float get() = EditorFonts.px(34f)
+        val SEGMENT: Float get() = BUTTON + EditorFonts.px(4f)
         val SPEEDS = doubleArrayOf(0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
         val MODE_ICONS = listOf(Icon.CAMERA, Icon.EYE, Icon.ORBIT, Icon.FOLLOW, Icon.TARGET)
     }
