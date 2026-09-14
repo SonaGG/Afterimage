@@ -8,22 +8,22 @@ pluginManagement {
     }
 }
 
-rootProject.name = "recast"
+rootProject.name = "afterimage"
 
 include(
-    "recast-core",
-    "recast-net",
-    "recast-protocol",
-    "recast-format",
-    "recast-capture",
-    "recast-replay",
-    "recast-camera",
-    "recast-clip",
-    "recast-flashback",
-    "recast-index",
-    "recast-editor-core",
-    "recast-editor-imgui",
-    "recast-render",
-    "recast-mc-adapter",
-    "recast-loader",
+    "afterimage-core",
+    "afterimage-net",
+    "afterimage-protocol",
+    "afterimage-format",
+    "afterimage-capture",
+    "afterimage-replay",
+    "afterimage-camera",
+    "afterimage-clip",
+    "afterimage-flashback",
+    "afterimage-index",
+    "afterimage-editor-core",
+    "afterimage-editor-imgui",
+    "afterimage-render",
+    "afterimage-mc-adapter",
+    "afterimage-loader",
 )

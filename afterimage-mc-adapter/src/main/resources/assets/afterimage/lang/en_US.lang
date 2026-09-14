@@ -1,0 +1,12 @@
+key.categories.afterimage=Afterimage
+key.afterimage.record=Start / stop recording
+key.afterimage.marker=Add marker
+key.afterimage.workspace=Toggle editor
+key.afterimage.play=Play / pause replay
+key.afterimage.seek_back=Seek back 5 s
+key.afterimage.seek_forward=Seek forward 5 s
+key.afterimage.slower=Slower playback
+key.afterimage.faster=Faster playback
+key.afterimage.camera_mode=Cycle camera mode
+key.afterimage.keyframe=Add camera keyframe
+key.afterimage.instant_clip=Save the last N seconds (instant replay)

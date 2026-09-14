@@ -22,8 +22,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: recast-mod
-          path: recast-loader/build/libs/*.jar
+          name: afterimage-mod
+          path: afterimage-loader/build/libs/*.jar
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
