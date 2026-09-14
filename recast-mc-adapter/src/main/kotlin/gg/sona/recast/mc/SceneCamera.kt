@@ -8,7 +8,8 @@ import net.minecraft.client.Minecraft
 import net.minecraft.entity.living.player.PlayerEntity
 import net.minecraft.util.math.Vec3d
 import org.joml.Vector3d
-import org.lwjgl.glfw.GLFW
+import org.lwjgl.sdl.SDLMouse
+import org.lwjgl.sdl.SDLScancode
 
 class SceneCamera(
     private val minecraft: Minecraft,
@@ -39,17 +40,14 @@ class SceneCamera(
     private val pivot = Vector3d()
     private var pivotDistance = 8.0
     private var pendingScroll = 0f
-    private var lastCursorX = 0.0
-    private var lastCursorY = 0.0
     private var pressCursorX = 0.0
     private var pressCursorY = 0.0
     private var holdSeconds = 0.0
     private var flight: Flight? = null
-    private var skipDelta = false
     private var yaw = 0.0
     private var pitch = 0.0
-    private val cursorX = DoubleArray(1)
-    private val cursorY = DoubleArray(1)
+    private val cursor = DoubleArray(2)
+    private val motion = DoubleArray(2)
 
     fun scroll(amount: Float) {
         pendingScroll += amount
@@ -90,19 +88,18 @@ class SceneCamera(
     fun wantsControl(viewportHovered: Boolean, keyboardFree: Boolean): Boolean {
         if (gesture != Gesture.NONE) return true
         if (!viewportHovered) return false
-        val window = GLFW.glfwGetCurrentContext()
-        if (window == 0L) return false
-        if (GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS) return true
-        if (GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_MIDDLE) == GLFW.GLFW_PRESS) return true
-        val alt = down(window, GLFW.GLFW_KEY_LEFT_ALT) || down(window, GLFW.GLFW_KEY_RIGHT_ALT)
-        if (alt && GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS) return true
+        if (!SdlWindow.isCreated) return false
+        val buttons = SdlWindow.mouseButtons()
+        if (buttons and SDLMouse.SDL_BUTTON_RMASK != 0) return true
+        if (buttons and SDLMouse.SDL_BUTTON_MMASK != 0) return true
+        val alt = down(SDLScancode.SDL_SCANCODE_LALT) || down(SDLScancode.SDL_SCANCODE_RALT)
+        if (alt && buttons and SDLMouse.SDL_BUTTON_LMASK != 0) return true
         return pendingScroll != 0f
     }
 
     fun onFrame(deltaNanos: Long, viewportHovered: Boolean, keyboardFree: Boolean): CameraPose? {
         val player = minecraft.player ?: return null
-        val window = GLFW.glfwGetCurrentContext()
-        if (window == 0L) return null
+        if (!SdlWindow.isCreated) return null
         val dt = (deltaNanos / Nanos.PER_SECOND.toDouble()).coerceIn(0.0, 0.1)
         var position = Vector3d(player.x, player.y + player.getEyeHeight(), player.z)
         yaw = player.yaw.toDouble()
@@ -119,16 +116,22 @@ class SceneCamera(
             return applyPose(player, pose)
         }
 
-        GLFW.glfwGetCursorPos(window, cursorX, cursorY)
-        val alt = down(window, GLFW.GLFW_KEY_LEFT_ALT) || down(window, GLFW.GLFW_KEY_RIGHT_ALT)
-        val left = GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS
-        val right = GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_RIGHT) == GLFW.GLFW_PRESS
-        val middle = GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_MIDDLE) == GLFW.GLFW_PRESS
-        val deltaX = if (skipDelta) 0.0 else cursorX[0] - lastCursorX
-        val deltaY = if (skipDelta) 0.0 else cursorY[0] - lastCursorY
-        skipDelta = false
-        lastCursorX = cursorX[0]
-        lastCursorY = cursorY[0]
+        SdlWindow.cursorPosition(cursor)
+        val buttons = SdlWindow.mouseButtons()
+        val alt = down(SDLScancode.SDL_SCANCODE_LALT) || down(SDLScancode.SDL_SCANCODE_RALT)
+        val left = buttons and SDLMouse.SDL_BUTTON_LMASK != 0
+        val right = buttons and SDLMouse.SDL_BUTTON_RMASK != 0
+        val middle = buttons and SDLMouse.SDL_BUTTON_MMASK != 0
+        val deltaX: Double
+        val deltaY: Double
+        if (gesture != Gesture.NONE) {
+            SdlWindow.relativeMotion(motion)
+            deltaX = motion[0]
+            deltaY = motion[1]
+        } else {
+            deltaX = 0.0
+            deltaY = 0.0
+        }
 
         if (gesture == Gesture.NONE && viewportHovered) {
             val wanted = when {
@@ -141,11 +144,11 @@ class SceneCamera(
             if (wanted != Gesture.NONE) {
                 gesture = wanted
                 gestureTravel = 0.0
-                pressCursorX = cursorX[0]
-                pressCursorY = cursorY[0]
+                pressCursorX = cursor[0]
+                pressCursorY = cursor[1]
                 if (wanted != Gesture.FLY) refreshPivot(position, Rotation(yaw, pitch))
-                lockCursor(cursorX[0], cursorY[0])
-                skipDelta = true
+                lockCursor(cursor[0], cursor[1])
+                SdlWindow.relativeMotion(motion)
             }
         } else if (gesture != Gesture.NONE) {
             val stillHeld = when (gesture) {
@@ -197,7 +200,7 @@ class SceneCamera(
             }
 
             Gesture.NONE -> if (viewportHovered && pendingScroll != 0f) {
-                val ray = cursorRay(window) ?: Vector3d(Rotation(yaw, pitch).forward())
+                val ray = cursorRay() ?: Vector3d(Rotation(yaw, pitch).forward())
                 val hit = rayHitDistance(position, ray) ?: pivotDistance
                 val step = pendingScroll * maxOf(0.4, hit * 0.14)
                 position.add(Vector3d(ray).mul(step.toDouble()))
@@ -206,23 +209,23 @@ class SceneCamera(
         }
         pendingScroll = 0f
 
-        val moving = updateVelocity(window, dt, keyboardFree && gesture == Gesture.FLY)
+        val moving = updateVelocity(dt, keyboardFree && gesture == Gesture.FLY)
         if (moving || velocity.lengthSquared() > 1e-6) position.add(Vector3d(velocity).mul(dt))
 
         return applyPose(player, CameraPose(position, Rotation(yaw, pitch, settings.roll), fov))
     }
 
-    private fun updateVelocity(window: Long, dt: Double, allowKeys: Boolean): Boolean {
+    private fun updateVelocity(dt: Double, allowKeys: Boolean): Boolean {
         var forward = 0.0
         var strafe = 0.0
         var vertical = 0.0
         if (allowKeys) {
-            if (down(window, GLFW.GLFW_KEY_W)) forward += 1.0
-            if (down(window, GLFW.GLFW_KEY_S)) forward -= 1.0
-            if (down(window, GLFW.GLFW_KEY_D)) strafe += 1.0
-            if (down(window, GLFW.GLFW_KEY_A)) strafe -= 1.0
-            if (down(window, GLFW.GLFW_KEY_SPACE) || down(window, GLFW.GLFW_KEY_E)) vertical += 1.0
-            if (down(window, GLFW.GLFW_KEY_LEFT_SHIFT) || down(window, GLFW.GLFW_KEY_Q)) vertical -= 1.0
+            if (down(SDLScancode.SDL_SCANCODE_W)) forward += 1.0
+            if (down(SDLScancode.SDL_SCANCODE_S)) forward -= 1.0
+            if (down(SDLScancode.SDL_SCANCODE_D)) strafe += 1.0
+            if (down(SDLScancode.SDL_SCANCODE_A)) strafe -= 1.0
+            if (down(SDLScancode.SDL_SCANCODE_SPACE) || down(SDLScancode.SDL_SCANCODE_E)) vertical += 1.0
+            if (down(SDLScancode.SDL_SCANCODE_LSHIFT) || down(SDLScancode.SDL_SCANCODE_Q)) vertical -= 1.0
         }
         val wants = forward != 0.0 || strafe != 0.0 || vertical != 0.0
         val target = Vector3d()
@@ -235,8 +238,8 @@ class SceneCamera(
             if (settings.lockY) target.y = 0.0
             if (settings.lockZ) target.z = 0.0
             var speed = settings.freeSpeed
-            if (down(window, GLFW.GLFW_KEY_LEFT_CONTROL) || down(window, GLFW.GLFW_KEY_RIGHT_CONTROL)) speed *= 4.0
-            if (down(window, GLFW.GLFW_KEY_LEFT_ALT) && gesture == Gesture.FLY) speed *= 0.25
+            if (down(SDLScancode.SDL_SCANCODE_LCTRL) || down(SDLScancode.SDL_SCANCODE_RCTRL)) speed *= 4.0
+            if (down(SDLScancode.SDL_SCANCODE_LALT) && gesture == Gesture.FLY) speed *= 0.25
             holdSeconds += dt
             if (settings.freeAcceleration) speed *= 1.0 + 1.5 * minOf(1.0, holdSeconds / 2.5)
             target.mul(speed)
@@ -255,26 +258,23 @@ class SceneCamera(
     }
 
     private fun refreshPivot(position: Vector3d, rotation: Rotation) {
-        val window = GLFW.glfwGetCurrentContext()
-        val ray = cursorRay(window) ?: rotation.forward()
+        val ray = cursorRay() ?: rotation.forward()
         val distance = rayHitDistance(position, ray) ?: pivotDistance.coerceIn(2.0, 32.0)
         pivotDistance = distance
         pivot.set(Vector3d(position).add(Vector3d(rotation.forward()).mul(distance)))
     }
 
-    private fun cursorRay(window: Long): Vector3d? {
+    private fun cursorRay(): Vector3d? {
         val bounds = viewport() ?: return null
-        val height = IntArray(1)
-        val width = IntArray(1)
-        GLFW.glfwGetFramebufferSize(window, width, height)
-        val windowWidth = IntArray(1)
-        val windowHeight = IntArray(1)
-        GLFW.glfwGetWindowSize(window, windowWidth, windowHeight)
-        if (windowWidth[0] <= 0 || windowHeight[0] <= 0 || bounds[2] <= 0 || bounds[3] <= 0) return null
-        val scaleX = width[0].toDouble() / windowWidth[0]
-        val scaleY = height[0].toDouble() / windowHeight[0]
-        val fx = cursorX[0] * scaleX
-        val fy = height[0] - cursorY[0] * scaleY
+        val width = SdlWindow.framebufferWidth
+        val height = SdlWindow.framebufferHeight
+        val windowWidth = SdlWindow.windowWidth
+        val windowHeight = SdlWindow.windowHeight
+        if (windowWidth <= 0 || windowHeight <= 0 || bounds[2] <= 0 || bounds[3] <= 0) return null
+        val scaleX = width.toDouble() / windowWidth
+        val scaleY = height.toDouble() / windowHeight
+        val fx = cursor[0] * scaleX
+        val fy = height - cursor[1] * scaleY
         val nx = ((fx - bounds[0]) / bounds[2]).toFloat()
         val ny = (1.0 - (fy - bounds[1]) / bounds[3]).toFloat()
         if (nx < 0f || nx > 1f || ny < 0f || ny > 1f) return null
@@ -306,7 +306,7 @@ class SceneCamera(
         return pose
     }
 
-    private fun down(window: Long, key: Int): Boolean = GLFW.glfwGetKey(window, key) == GLFW.GLFW_PRESS
+    private fun down(scancode: Int): Boolean = SdlWindow.keyDown(scancode)
 
     private companion object {
         const val MAX_HIT_DISTANCE = 96.0

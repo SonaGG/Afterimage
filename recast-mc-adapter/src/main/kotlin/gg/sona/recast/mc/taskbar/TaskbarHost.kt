@@ -4,7 +4,7 @@ import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.*
 import com.sun.jna.ptr.PointerByReference
 import org.apache.logging.log4j.LogManager
-import org.lwjgl.opengl.Display
+import gg.sona.recast.mc.SdlWindow
 
 object TaskbarHost {
     private val LOGGER = LogManager.getLogger("Recast/Taskbar")
@@ -30,7 +30,7 @@ object TaskbarHost {
             pointerRef,
         )
         if (W32Errors.FAILED(hr)) throw IllegalStateException("Failed to create ITaskbarList3 (hr=$hr)")
-        val hwnd = WinDef.HWND(Pointer(Display.getHandle()))
+        val hwnd = WinDef.HWND(Pointer(SdlWindow.nativeHandle()))
         return WindowsTaskbar(pointerRef.value, hwnd)
     }
 }

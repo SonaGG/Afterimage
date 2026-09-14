@@ -1,23 +1,22 @@
 package gg.sona.recast.mc
 
+import gg.sona.recast.mc.compat.ArgentumCompat
 import gg.sona.recast.mc.mixin.ChunkRenderDispatcherAccessor
 import gg.sona.recast.mc.mixin.WorldRendererAccessor
 import net.minecraft.client.Minecraft
 
-// TODO: thanks Opus for this shitty fix
-//       it resolves chunks sometimes just.. not loading
-//       but its janky and uh prolly wont work w argentum
-//       sooo yippie more fun for future me
 class ChunkReadiness(private val minecraft: Minecraft) {
     private var maxBuffers = 0
 
     fun calibrate() {
+        if (ArgentumCompat.handlesTerrain) return
         val renderer = minecraft.worldRenderer as? WorldRendererAccessor ?: return
         val dispatcher = renderer.`recast$dispatcher`() as? ChunkRenderDispatcherAccessor ?: return
         maxBuffers = maxOf(maxBuffers, dispatcher.`recast$availableBuffers`().size, dispatcher.`recast$workers`().size)
     }
 
     fun settled(): Boolean {
+        if (ArgentumCompat.handlesTerrain) return ArgentumCompat.terrainSettled(minecraft.worldRenderer)
         val renderer = minecraft.worldRenderer as? WorldRendererAccessor ?: return true
         val dispatcher = renderer.`recast$dispatcher`() as? ChunkRenderDispatcherAccessor ?: return true
         val buffers = dispatcher.`recast$availableBuffers`().size
@@ -30,6 +29,7 @@ class ChunkReadiness(private val minecraft: Minecraft) {
     }
 
     fun pendingDescription(): String {
+        if (ArgentumCompat.handlesTerrain) return ArgentumCompat.pendingTerrainDescription(minecraft.worldRenderer)
         val renderer = minecraft.worldRenderer as? WorldRendererAccessor ?: return ""
         val dispatcher = renderer.`recast$dispatcher`() as? ChunkRenderDispatcherAccessor ?: return ""
         val dirty = renderer.`recast$dirtyChunks`().size

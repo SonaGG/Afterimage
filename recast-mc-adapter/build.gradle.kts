@@ -15,8 +15,8 @@ repositories {
         }
         name = "JitPack"
     }
+    maven(url = "https://maven.cloverclient.com/releases")
     maven("https://maven.legacyfabric.net/") { name = "legacy-fabric" }
-    maven(url = "https://maven.axolotlclient.com/releases") { name = "axolotl-client" }
     mavenCentral()
     exclusiveContent {
         forRepository { mavenCentral() }
@@ -31,7 +31,7 @@ dependencies {
         mappings(rootProject.file("mappings/feather-overrides.tiny"))
     })
 
-    modImplementation(libs.legacy.lwjgl3)
+    modImplementation(libs.lenis)
     modImplementation(libs.fabric.loader)
     ploceus.dependOsl(libs.versions.osl.get())
 

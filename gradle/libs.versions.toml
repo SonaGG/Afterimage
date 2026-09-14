@@ -3,8 +3,7 @@ fabric-loader = "0.19.3"
 fabric-loom = "1.17-SNAPSHOT"
 minecraft = "1.8.9"
 kotlin = "2.4.0"
-lwjgl = "3.4.1"
-legacy-lwjgl3 = "1.4.1"
+lenis = "0.1.4"
 joml = "1.10.8"
 imgui = "1.89.0"
 zstd = "1.5.7-16"
@@ -16,7 +15,7 @@ devauth = "1.2.2"
 [libraries]
 minecraft = { module = "com.mojang:minecraft", version.ref = "minecraft" }
 fabric-loader = { module = "net.fabricmc:fabric-loader", version.ref = "fabric-loader" }
-legacy-lwjgl3 = { module = "io.github.moehreag:legacy-lwjgl3", version.ref = "legacy-lwjgl3" }
+lenis = { module = "pl.tomgirl:lenis", version.ref = "lenis" }
 
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 joml = { module = "org.joml:joml", version.ref = "joml" }
@@ -25,7 +24,6 @@ javacpp-core = { module = "org.bytedeco:javacpp", version.ref = "javacpp" }
 javacpp-ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "javacpp-ffmpeg" }
 
 imgui-binding = { module = "io.github.spair:imgui-java-binding", version.ref = "imgui" }
-imgui-lwjgl3 = { module = "io.github.spair:imgui-java-lwjgl3", version.ref = "imgui" }
 imgui-natives-windows = { module = "io.github.spair:imgui-java-natives-windows", version.ref = "imgui" }
 imgui-natives-linux = { module = "io.github.spair:imgui-java-natives-linux", version.ref = "imgui" }
 imgui-natives-macos = { module = "io.github.spair:imgui-java-natives-macos", version.ref = "imgui" }

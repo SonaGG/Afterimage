@@ -3,9 +3,9 @@ package gg.sona.recast.mc.ui
 import gg.sona.recast.editor.imgui.*
 import imgui.ImGui
 import imgui.flag.ImGuiConfigFlags
+import gg.sona.recast.mc.SdlWindow
 import net.minecraft.client.Minecraft
 import org.apache.logging.log4j.LogManager
-import org.lwjgl.glfw.GLFW
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.math.roundToInt
@@ -159,13 +159,10 @@ class WorkspaceHost(private val minecraft: Minecraft, private val iniPath: Path)
         ImGui.getStyle().scaleAllSizes(scale)
     }
 
-    private fun detectScale(window: Long): Float {
+    private fun detectScale(): Float {
         val override = System.getenv("RECAST_UI_SCALE")?.toFloatOrNull()
         if (override != null && override > 0f) return override
-        val x = FloatArray(1)
-        val y = FloatArray(1)
-        GLFW.glfwGetWindowContentScale(window, x, y)
-        return if (x[0] > 0f) x[0] else 1f
+        return SdlWindow.displayScale
     }
 
     var textInputActive: Boolean = false
@@ -216,8 +213,7 @@ class WorkspaceHost(private val minecraft: Minecraft, private val iniPath: Path)
     private fun start() {
         if (started || failed) return
         try {
-            val window = GLFW.glfwGetCurrentContext()
-            require(window != 0L) { "no current GLFW context" }
+            require(SdlWindow.isCreated) { "SDL window not created" }
             Files.createDirectories(iniPath.parent)
             ImGui.createContext()
             ImGui.setAssertCallback(object : imgui.assertion.ImAssertCallback() {
@@ -230,18 +226,14 @@ class WorkspaceHost(private val minecraft: Minecraft, private val iniPath: Path)
             io.addConfigFlags(ImGuiConfigFlags.NavEnableKeyboard)
             io.addBackendFlags(imgui.flag.ImGuiBackendFlags.RendererHasVtxOffset)
             io.iniFilename = iniPath.toString()
-            uiScale = detectScale(window)
+            uiScale = detectScale()
             EditorTheme.apply()
             ImGui.getStyle().scaleAllSizes(uiScale)
             EditorFonts.load(uiScale)
             renderer.start()
             renderer.createFontAtlas()
-            input = ImGuiInput(window)
-            GLFW.glfwSetDropCallback(window) { _, count, names ->
-                val dropped = ArrayList<String>(count)
-                for (index in 0 until count) dropped += org.lwjgl.glfw.GLFWDropCallback.getName(names, index)
-                onFilesDropped(dropped)
-            }
+            input = ImGuiInput()
+            SdlWindow.watchFileDrops { dropped -> onFilesDropped(dropped) }
             started = true
             logger.info("Recast workspace initialised")
         } catch (error: Throwable) {

@@ -1,5 +1,6 @@
 package gg.sona.recast.mc
 
+import gg.sona.recast.mc.compat.ArgentumCompat
 import gg.sona.recast.mc.mixin.ChunkRenderDispatcherAccessor
 import gg.sona.recast.mc.mixin.WorldRendererAccessor
 import net.minecraft.client.Minecraft
@@ -11,7 +12,7 @@ class ChunkWorkers(private val minecraft: Minecraft) {
     private var added = false
 
     fun ensure() {
-        if (added) return
+        if (added || ArgentumCompat.isLoaded) return
         val renderer = minecraft.worldRenderer as? WorldRendererAccessor ?: return
         val dispatcher = renderer.`recast$dispatcher`() ?: return
         val accessor = dispatcher as? ChunkRenderDispatcherAccessor ?: return

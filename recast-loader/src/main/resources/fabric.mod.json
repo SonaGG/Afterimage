@@ -22,6 +22,7 @@
   "depends": {
     "minecraft": "1.8.9",
     "fabricloader": ">=0.15.0",
+    "lenis": ">=0.1.4",
     "recast-adapter": "*",
     "osl-entrypoints": "*",
     "osl-lifecycle-events": "*",
