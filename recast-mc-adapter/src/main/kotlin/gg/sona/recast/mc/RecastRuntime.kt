@@ -276,6 +276,7 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
         }
         replayer.onOpened = ::onReplayOpened
         exporter.focusDistance = { nanos, pose -> context.session?.focusDistanceAt(nanos, pose.position) ?: 8.0 }
+        exporter.projectionScale = { viewportPicker.tanHalfFov() }
         lookPreview.viewport = { workspace.currentWorldViewport() ?: intArrayOf(0, 0, minecraft.width, minecraft.height) }
         lookPreview.request = { lookPreviewRequest() }
         visualsController.alphaExport = { exporter.transparentExport }
@@ -515,6 +516,7 @@ class RecastRuntime(val minecraft: Minecraft) : EditorHost {
             look,
             session.focusDistanceAt(replay.positionNanos, pose.position),
             false,
+            viewportPicker.tanHalfFov(),
             (replay.positionNanos / PREVIEW_GRAIN_NANOS % 4096L).toFloat(),
         )
     }

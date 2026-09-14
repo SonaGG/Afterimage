@@ -13,7 +13,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 class PostProcessor(private val lutsDirectory: () -> Path) {
 
@@ -29,8 +31,10 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
         val near: Float,
         val far: Float,
         val orthographic: Boolean,
+        val tanHalfFov: FloatArray,
         val seed: Float,
         val maxTaps: Int,
+        val spacing: Float,
         val tapOffset: Float = 0f,
     )
 
@@ -76,9 +80,9 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
         if (!ensure()) return false
         val program = look ?: return false
         val lutTexture = if (grade && settings.lut.isNotEmpty()) resolveLut(settings.lut) else null
-        val taps = frame.maxTaps.coerceIn(8, MAX_TAPS)
-        val radiusScale = max(MIN_RADIUS_SCALE, (maxCoc * maxCoc) / (2f * taps))
-        val bias = if (radiusScale > 1f) (ln(radiusScale.toDouble()) / ln(2.0)).toFloat() else 0f
+        val taps = if (depthOfField) (PI * maxCoc * maxCoc / (frame.spacing * frame.spacing)).toInt().coerceIn(MIN_TAPS, frame.maxTaps.coerceIn(MIN_TAPS, MAX_TAPS)) else MIN_TAPS
+        val spacing = if (depthOfField) maxCoc * sqrt(PI / taps) else 1f
+        val bias = if (spacing > LOD_TEXELS) min(MAX_LOD_BIAS, (ln((spacing / LOD_TEXELS).toDouble()) / ln(2.0)).toFloat()) else 0f
         GL11.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS)
         try {
             GL13.glActiveTexture(GL13.GL_TEXTURE0)
@@ -109,7 +113,8 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             GL20.glUniform1f(program["focus"], frame.focusDistance.toFloat())
             GL20.glUniform1f(program["focusRange"], settings.focusRange.toFloat())
             GL20.glUniform1f(program["maxCoc"], maxCoc)
-            GL20.glUniform1f(program["radiusScale"], radiusScale)
+            GL20.glUniform1f(program["tapSpacing"], spacing)
+            GL20.glUniform2f(program["tanHalf"], frame.tanHalfFov[0], frame.tanHalfFov[1])
             GL20.glUniform1f(program["lodBias"], bias)
             GL20.glUniform1i(program["maxTaps"], taps)
             GL20.glUniform1f(program["tapOffset"], frame.tapOffset)
@@ -288,11 +293,16 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
     companion object {
         const val NEAR_PLANE = 0.05f
         const val SQRT_2 = 1.4142135f
-        const val MAX_TAPS = 512
-        const val EXPORT_TAPS = 320
-        const val PREVIEW_TAPS = 96
+        const val MAX_TAPS = 2048
+        const val MIN_TAPS = 16
+        const val EXPORT_TAPS = 2048
+        const val EXPORT_SPACING = 1.75f
+        const val PREVIEW_TAPS = 512
+        const val PREVIEW_SPACING = 2.5f
         private const val MAX_COC_FRACTION = 0.045f
-        private const val MIN_RADIUS_SCALE = 0.75f
+        private const val LOD_TEXELS = 1.5f
+        private const val MAX_LOD_BIAS = 4f
+        private const val PI = 3.1415927f
 
         fun farPlane(viewDistance: Int): Float = viewDistance * 16f * SQRT_2
 
@@ -305,7 +315,7 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
 
         private val LOOK_UNIFORMS = listOf(
             "color", "depth", "lut", "texel", "aspect", "near", "far", "ortho", "focus", "focusRange", "maxCoc",
-            "radiusScale", "lodBias", "maxTaps", "tapOffset", "exposure", "contrast", "saturation", "lutStrength", "lutSize",
+            "tapSpacing", "tanHalf", "lodBias", "maxTaps", "tapOffset", "exposure", "contrast", "saturation", "lutStrength", "lutSize",
             "vignette", "vignetteSoftness", "letterbox", "grain", "grainSize", "seed",
         )
 
@@ -333,7 +343,8 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             "uniform float focus;",
             "uniform float focusRange;",
             "uniform float maxCoc;",
-            "uniform float radiusScale;",
+            "uniform float tapSpacing;",
+            "uniform vec2 tanHalf;",
             "uniform float lodBias;",
             "uniform int maxTaps;",
             "uniform float tapOffset;",
@@ -350,6 +361,7 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             "uniform float seed;",
             "varying vec2 uv;",
             "const float GOLDEN_ANGLE = 2.39996323;",
+            "const mat2 GOLDEN_ROTATION = mat2(-0.7373688, 0.6754903, -0.6754903, -0.7373688);",
             "const int TAP_LIMIT = $MAX_TAPS;",
             "float linearDepth(vec2 at) {",
             "    float z = texture2D(depth, at).r;",
@@ -357,34 +369,45 @@ class PostProcessor(private val lutsDirectory: () -> Path) {
             "    float ndc = z * 2.0 - 1.0;",
             "    return 2.0 * near * far / (far + near - ndc * (far - near));",
             "}",
+            "float viewDistance(vec2 at) {",
+            "    float z = linearDepth(at);",
+            "    if (ortho == 1) return z;",
+            "    vec2 v = (at * 2.0 - 1.0) * tanHalf;",
+            "    return z * sqrt(1.0 + dot(v, v));",
+            "}",
             "float cocOf(float d) {",
             "    float delta = abs(d - focus) - focusRange;",
             "    if (delta <= 0.0) return 0.0;",
             "    return min(maxCoc, maxCoc * delta / max(d, 0.05));",
             "}",
+            "vec3 toLinear(vec3 c) {",
+            "    return c * c;",
+            "}",
             "vec4 depthOfField() {",
             "    vec4 center = texture2D(color, uv);",
             "    if (maxCoc <= 0.5) return center;",
-            "    float centerDepth = linearDepth(uv);",
+            "    float centerDepth = viewDistance(uv);",
             "    float centerSize = cocOf(centerDepth);",
-            "    vec4 acc = center;",
+            "    vec3 acc = toLinear(center.rgb);",
+            "    float accAlpha = center.a;",
             "    float total = 1.0;",
-            "    float radius = radiusScale;",
-            "    float angle = tapOffset;",
+            "    float invTaps = 1.0 / float(maxTaps);",
+            "    vec2 direction = vec2(cos(tapOffset), sin(tapOffset));",
             "    for (int i = 0; i < TAP_LIMIT; i++) {",
-            "        if (i >= maxTaps || radius >= maxCoc) break;",
-            "        angle += GOLDEN_ANGLE;",
-            "        vec2 at = uv + vec2(cos(angle), sin(angle)) * texel * radius;",
-            "        float sampleDepth = linearDepth(at);",
+            "        if (i >= maxTaps) break;",
+            "        float radius = maxCoc * sqrt((float(i) + 0.5) * invTaps);",
+            "        direction = GOLDEN_ROTATION * direction;",
+            "        vec2 at = uv + direction * texel * radius;",
+            "        float sampleDepth = viewDistance(at);",
             "        float sampleSize = cocOf(sampleDepth);",
             "        if (sampleDepth > centerDepth) sampleSize = clamp(sampleSize, 0.0, centerSize * 2.0);",
-            "        float m = smoothstep(radius - 0.5, radius + 0.5, sampleSize);",
-            "        vec4 sampleColor = texture2D(color, at, lodBias);",
-            "        acc += mix(acc / total, sampleColor, m);",
+            "        float m = smoothstep(max(radius - tapSpacing * 0.5, 0.0), radius + 0.5, sampleSize);",
+            "        vec4 s = texture2D(color, at, lodBias);",
+            "        acc += mix(acc / total, toLinear(s.rgb), m);",
+            "        accAlpha += mix(accAlpha / total, s.a, m);",
             "        total += 1.0;",
-            "        radius += radiusScale / radius;",
             "    }",
-            "    return acc / total;",
+            "    return vec4(sqrt(acc / total), accAlpha / total);",
             "}",
             "float hash(vec2 p) {",
             "    vec3 p3 = fract(vec3(p.xyx) * 0.1031);",

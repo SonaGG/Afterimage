@@ -42,6 +42,13 @@ class ViewportPicker(private val minecraft: Minecraft) {
         valid = true
     }
 
+    fun tanHalfFov(): FloatArray {
+        if (!valid) return floatArrayOf(1f, 1f)
+        val x = projection.m00()
+        val y = projection.m11()
+        return floatArrayOf(if (x != 0f) 1f / x else 1f, if (y != 0f) 1f / y else 1f)
+    }
+
     fun ray(normalizedX: Float, normalizedY: Float): Vector3d? = worldRay(normalizedX, normalizedY)?.second
 
     fun worldRay(normalizedX: Float, normalizedY: Float): Pair<Vector3d, Vector3d>? {

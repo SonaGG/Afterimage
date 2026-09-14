@@ -94,6 +94,7 @@ class FramebufferExporter(
     private var pendingPost = false
     private var lookRequested = false
     var focusDistance: (Long, CameraPose) -> Double = { _, _ -> 8.0 }
+    var projectionScale: () -> FloatArray = { floatArrayOf(1f, 1f) }
 
     val transparentExport: Boolean get() = exporting && settings?.transparent == true
     private var incompleteChunkFrames = 0
@@ -436,8 +437,10 @@ class FramebufferExporter(
             PostProcessor.NEAR_PLANE,
             PostProcessor.farPlane(minecraft.options.viewDistance),
             settings.projection == ExportProjection.ORTHOGRAPHIC,
+            projectionScale(),
             (currentIndex % 4096L).toFloat(),
             maxOf(MIN_SAMPLE_TAPS, PostProcessor.EXPORT_TAPS / samples),
+            PostProcessor.EXPORT_SPACING * settings.supersampleFactor,
             sampleIndex * SAMPLE_TAP_ROTATION,
         )
     }
@@ -845,7 +848,7 @@ class FramebufferExporter(
         const val CHUNK_BUDGET_NANOS = 250_000_000L
         const val REQUEST_WAIT_NANOS = 8_000_000L
         const val EQUIRECT_FOV = 92f
-        const val MIN_SAMPLE_TAPS = 64
+        const val MIN_SAMPLE_TAPS = 512
         const val SAMPLE_TAP_ROTATION = 0.7853982f
     }
 }

@@ -6,7 +6,7 @@ import org.lwjgl.opengl.GL11
 
 class LookPreview(private val minecraft: Minecraft, private val post: PostProcessor) {
 
-    class Request(val look: LookSettings, val focusDistance: Double, val orthographic: Boolean, val seed: Float)
+    class Request(val look: LookSettings, val focusDistance: Double, val orthographic: Boolean, val tanHalfFov: FloatArray, val seed: Float)
 
     var request: () -> Request? = { null }
     var viewport: () -> IntArray? = { null }
@@ -38,8 +38,10 @@ class LookPreview(private val minecraft: Minecraft, private val post: PostProces
                     PostProcessor.NEAR_PLANE,
                     PostProcessor.farPlane(minecraft.options.viewDistance),
                     request.orthographic,
+                    request.tanHalfFov,
                     request.seed,
                     PostProcessor.PREVIEW_TAPS,
+                    PostProcessor.PREVIEW_SPACING,
                 ),
             )
         } finally {
