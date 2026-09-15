@@ -60,31 +60,31 @@ object AfterimageHooks26 {
     val current: AfterimageRuntime26? get() = runtime
 
     @JvmStatic
-    fun onConnection(connection: Connection) = guarded("connection") {
+    fun onConnection(connection: Connection) = runTask("connection") {
         if (!ReplayConnections26.isReplay(connection)) it.recorder.onConnection(connection)
     }
 
     @JvmStatic
-    fun onPlayConnection(connection: Connection) = guarded("play connection") {
-        if (ReplayConnections26.isReplay(connection)) return@guarded
+    fun onPlayConnection(connection: Connection) = runTask("play connection") {
+        if (ReplayConnections26.isReplay(connection)) return@runTask
         if (it.replayer.isReplaying) it.replayer.abandon()
         it.recorder.onConnection(connection)
     }
 
     @JvmStatic
-    fun onDisconnect() = guarded("disconnect") { it.recorder.onDisconnect() }
+    fun onDisconnect() = runTask("disconnect") { it.recorder.onDisconnect() }
 
     @JvmStatic
-    fun onClientTickStart() = guarded("client tick start") { it.onClientTickStart() }
+    fun onClientTickStart() = runTask("client tick start") { it.onClientTickStart() }
 
     @JvmStatic
-    fun onClientTick() = guarded("client tick") { it.onClientTick() }
+    fun onClientTick() = runTask("client tick") { it.onClientTick() }
 
     @JvmStatic
-    fun onFrameStart(tickDelta: Float) = guarded("frame start") { it.onFrameStart(tickDelta) }
+    fun onFrameStart(tickDelta: Float) = runTask("frame start") { it.onFrameStart(tickDelta) }
 
     @JvmStatic
-    fun onCameraExtracted(state: CameraRenderState, fov: Float) = guarded("camera extract") {
+    fun onCameraExtracted(state: CameraRenderState, fov: Float) = runTask("camera extract") {
         it.cameraDriver.orthoScaleOverride()?.let { scale ->
             val window = it.minecraft.window
             val aspect = window.width.toFloat() / window.height.coerceAtLeast(1)
@@ -110,7 +110,7 @@ object AfterimageHooks26 {
     fun guiScissor(x: Int, y: Int, width: Int, height: Int): IntArray = runtime?.viewportFit?.scissor(x, y, width, height) ?: intArrayOf(x, y, width, height)
 
     @JvmStatic
-    fun onCameraUpdated(camera: Camera) = guarded("camera update") { it.cameraDriver.onCameraUpdated(camera) }
+    fun onCameraUpdated(camera: Camera) = runTask("camera update") { it.cameraDriver.onCameraUpdated(camera) }
 
     @JvmStatic
     fun cameraFov(): Float = runtime?.cameraDriver?.fovOverride() ?: 0f
@@ -119,7 +119,7 @@ object AfterimageHooks26 {
     fun orthoScale(): Float? = runtime?.cameraDriver?.orthoScaleOverride()
 
     @JvmStatic
-    fun onBob(bob: Matrix4fc) = guarded("camera bob") { it.recorder.camera.onBob(bob) }
+    fun onBob(bob: Matrix4fc) = runTask("camera bob") { it.recorder.camera.onBob(bob) }
 
     @JvmStatic
     fun handPose(viewRotation: Matrix4fc, pose: Matrix4fc, state: CameraRenderState): Matrix4fc {
@@ -133,7 +133,7 @@ object AfterimageHooks26 {
     fun hideHand(): Boolean = runtime?.let { it.replayer.isReplaying && it.cameraDriver.hideHand() } == true
 
     @JvmStatic
-    fun onExtracted(state: GameRenderState) = guarded("extract") { current ->
+    fun onExtracted(state: GameRenderState) = runTask("extract") { current ->
         val visuals = current.visualsController
         if (visuals.hideClouds()) state.levelRenderState.cloudColor = 0
         if (visuals.hideWeather()) state.levelRenderState.weatherRenderState.reset()
@@ -152,16 +152,16 @@ object AfterimageHooks26 {
     }
 
     @JvmStatic
-    fun onWorldRendered() = guarded("world rendered") { it.onWorldRendered() }
+    fun onWorldRendered() = runTask("world rendered") { it.onWorldRendered() }
 
     @JvmStatic
-    fun onLevelRendered() = guarded("level rendered") { it.onLevelRendered() }
+    fun onLevelRendered() = runTask("level rendered") { it.onLevelRendered() }
 
     @JvmStatic
-    fun onFrameEnd() = guarded("frame end") { it.onFrameEnd() }
+    fun onFrameEnd() = runTask("frame end") { it.onFrameEnd() }
 
     @JvmStatic
-    fun onTimerAdvanced(timer: TimerAccessor) = guarded("timer advance") { it.onTimerAdvanced(timer) }
+    fun onTimerAdvanced(timer: TimerAccessor) = runTask("timer advance") { it.onTimerAdvanced(timer) }
 
     @JvmStatic
     fun worldFrozen(): Boolean {
@@ -170,8 +170,8 @@ object AfterimageHooks26 {
     }
 
     @JvmStatic
-    fun onFrozenRendererTick(renderer: GameRenderer) = guarded("frozen renderer tick") {
-        if (it.replayer.session?.playing == true || it.minecraft.level == null) return@guarded
+    fun onFrozenRendererTick(renderer: GameRenderer) = runTask("frozen renderer tick") {
+        if (it.replayer.session?.playing == true || it.minecraft.level == null) return@runTask
         (renderer as GameRendererAccessor).afterimage_lightmapExtractor().tick()
         renderer.mainCamera().tick()
     }
@@ -180,7 +180,7 @@ object AfterimageHooks26 {
     fun sizeOverride(): IntArray? = runtime?.exportPlatform?.sizeOverride
 
     @JvmStatic
-    fun onHudExtracted(graphics: GuiGraphicsExtractor, partialTick: Float) = guarded("hud overlays") {
+    fun onHudExtracted(graphics: GuiGraphicsExtractor, partialTick: Float) = runTask("hud overlays") {
         it.screenMirror.extract(graphics, partialTick)
         it.recordingHud.render(graphics, it.recorder, it.settings.recordingIndicator, it.workspace.isOpen)
     }
@@ -195,10 +195,10 @@ object AfterimageHooks26 {
     fun chatFocusMirrored(): Boolean = runtime?.screenMirror?.chatFocused() == true
 
     @JvmStatic
-    fun beforeSlotClick(screen: AbstractContainerScreen<*>) = guarded("slot click") { it.recorder.beforeSlotClick(screen) }
+    fun beforeSlotClick(screen: AbstractContainerScreen<*>) = runTask("slot click") { it.recorder.beforeSlotClick(screen) }
 
     @JvmStatic
-    fun afterSlotClick(screen: AbstractContainerScreen<*>) = guarded("slot click") { it.recorder.afterSlotClick(screen) }
+    fun afterSlotClick(screen: AbstractContainerScreen<*>) = runTask("slot click") { it.recorder.afterSlotClick(screen) }
 
     @JvmStatic
     fun updateInventoryInPlace(menuSlot: Boolean, slot: Int, item: net.minecraft.world.item.ItemStack): Boolean {
@@ -225,7 +225,7 @@ object AfterimageHooks26 {
     }
 
     @JvmStatic
-    fun afterPick() = guarded("crosshair target") { it.cameraDriver.overrideCrosshairTarget() }
+    fun afterPick() = runTask("crosshair target") { it.cameraDriver.overrideCrosshairTarget() }
 
     @JvmStatic
     fun onLocalPlayerTick(player: LocalPlayer) {
@@ -421,10 +421,10 @@ object AfterimageHooks26 {
     }
 
     @JvmStatic
-    fun onLocalBlockChange(pos: BlockPos, state: BlockState) = guarded("local block change") { it.recorder.onLocalBlockChange(pos, state) }
+    fun onLocalBlockChange(pos: BlockPos, state: BlockState) = runTask("local block change") { it.recorder.onLocalBlockChange(pos, state) }
 
     @JvmStatic
-    fun onBlockMiningProgress(breakerId: Int, pos: BlockPos, progress: Int) = guarded("mining progress") { it.recorder.onBlockMiningProgress(breakerId, pos, progress) }
+    fun onBlockMiningProgress(breakerId: Int, pos: BlockPos, progress: Int) = runTask("mining progress") { it.recorder.onBlockMiningProgress(breakerId, pos, progress) }
 
     @JvmStatic
     fun reseedForPacket(timestampNanos: Long) {
@@ -432,7 +432,7 @@ object AfterimageHooks26 {
     }
 
     @JvmStatic
-    fun openWorkspace() = guarded("open workspace") { it.workspace.open() }
+    fun openWorkspace() = runTask("open workspace") { it.workspace.open() }
 
     @JvmStatic
     fun onReplayConnectionError(connection: Connection, error: Throwable): Boolean {
@@ -448,7 +448,7 @@ object AfterimageHooks26 {
         runCatching { current.shutdown() }.onFailure { logger.error("Afterimage shutdown failed", it) }
     }
 
-    private inline fun guarded(what: String, action: (AfterimageRuntime26) -> Unit) {
+    private inline fun runTask(what: String, action: (AfterimageRuntime26) -> Unit) {
         val current = runtime() ?: return
         try {
             action(current)

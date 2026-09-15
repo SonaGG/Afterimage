@@ -83,7 +83,7 @@ object AfterimageHooks {
     @JvmStatic
     fun onPlayConnection(connection: Connection) {
         if (buildingReplayConnection.get()) return
-        guarded("play connection") {
+        runTask("play connection") {
             if (it.replayer.isReplaying) it.replayer.abandon()
             it.recorder.onPlayConnection(connection)
         }
@@ -91,17 +91,17 @@ object AfterimageHooks {
 
     @JvmStatic
     fun onPlayDisconnect(connection: Connection) =
-        guarded("play disconnect") { it.recorder.onConnectionClosed(connection) }
+        runTask("play disconnect") { it.recorder.onConnectionClosed(connection) }
 
     @JvmStatic
     fun onCompressionChanged(channel: Channel) =
-        guarded("compression change") { it.recorder.onCompressionChanged(channel) }
+        runTask("compression change") { it.recorder.onCompressionChanged(channel) }
 
     @JvmStatic
-    fun onFrameStart(tickDelta: Float) = guarded("frame start") { it.onFrameStart(tickDelta) }
+    fun onFrameStart(tickDelta: Float) = runTask("frame start") { it.onFrameStart(tickDelta) }
 
     @JvmStatic
-    fun onFrameEnd() = guarded("frame end") { it.onFrameEnd() }
+    fun onFrameEnd() = runTask("frame end") { it.onFrameEnd() }
 
     @JvmStatic
     fun cameraFov(): Float = runtime?.cameraDriver?.fovOverride() ?: 0f
@@ -115,10 +115,10 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun onCameraSetup(tickDelta: Float) = guarded("camera setup") {
+    fun onCameraSetup(tickDelta: Float) = runTask("camera setup") {
         if (it.preview.rendering) {
             it.cameraDriver.onCameraSetup()
-            return@guarded
+            return@runTask
         }
         it.recorder.onCameraSetup(tickDelta)
         it.cameraDriver.onCameraSetup()
@@ -127,7 +127,7 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun onHandSetup() = guarded("hand setup") {
+    fun onHandSetup() = runTask("hand setup") {
         it.recorder.onHandSetup()
         it.cameraDriver.onHandSetup()
     }
@@ -144,7 +144,7 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun onHudRendered(tickDelta: Float) = guarded("hud overlays") {
+    fun onHudRendered(tickDelta: Float) = runTask("hud overlays") {
         it.screenMirror.render(tickDelta)
         it.recordingHud.render(it.recorder, it.settings.recordingIndicator, it.workspace.isOpen)
     }
@@ -172,7 +172,7 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun onReplayWorldSwitch() = guarded("replay world switch") { it.replayer.onWorldSwitch() }
+    fun onReplayWorldSwitch() = runTask("replay world switch") { it.replayer.onWorldSwitch() }
 
     @JvmStatic
     fun keepsReplayScreen(requested: Screen?): Boolean {
@@ -182,13 +182,13 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun beforeSlotClick(screen: InventoryMenuScreen) = guarded("slot click") { it.recorder.beforeSlotClick(screen) }
+    fun beforeSlotClick(screen: InventoryMenuScreen) = runTask("slot click") { it.recorder.beforeSlotClick(screen) }
 
     @JvmStatic
-    fun afterSlotClick(screen: InventoryMenuScreen) = guarded("slot click") { it.recorder.afterSlotClick(screen) }
+    fun afterSlotClick(screen: InventoryMenuScreen) = runTask("slot click") { it.recorder.afterSlotClick(screen) }
 
     @JvmStatic
-    fun afterPick() = guarded("crosshair target") { it.cameraDriver.overrideCrosshairTarget() }
+    fun afterPick() = runTask("crosshair target") { it.cameraDriver.overrideCrosshairTarget() }
 
     @JvmStatic
     fun chatFocusMirrored(): Boolean = runtime?.screenMirror?.chatFocused() == true
@@ -196,7 +196,7 @@ object AfterimageHooks {
     @JvmStatic
     fun onClientTickStart() {
         localEditDepth = 0
-        guarded("client tick start") { it.recorder.onClientTickStart() }
+        runTask("client tick start") { it.recorder.onClientTickStart() }
     }
 
     @JvmStatic
@@ -219,11 +219,11 @@ object AfterimageHooks {
 
     @JvmStatic
     fun onWorldRendered(tickDelta: Float) =
-        guarded("world overlays") { if (!it.preview.rendering) it.gizmoRenderer.render(tickDelta) }
+        runTask("world overlays") { if (!it.preview.rendering) it.gizmoRenderer.render(tickDelta) }
 
     @JvmStatic
     fun onWorldPassComplete(tickDelta: Float, finishNanos: Long) =
-        guarded("camera preview") { it.preview.onWorldRendered(tickDelta, finishNanos) }
+        runTask("camera preview") { it.preview.onWorldRendered(tickDelta, finishNanos) }
 
     @JvmStatic
     fun hideHand(): Boolean = runtime?.cameraDriver?.hideHand() == true
@@ -304,7 +304,7 @@ object AfterimageHooks {
     fun displayTickRandom(): Random = runtime?.displayTickRandom() ?: Random()
 
     @JvmStatic
-    fun onWorldPassEnd() = guarded("depth capture") {
+    fun onWorldPassEnd() = runTask("depth capture") {
         it.exporter.onWorldPassEnd()
         if (!it.exporter.isExporting && !it.preview.rendering) it.lookPreview.onWorldPassEnd()
     }
@@ -398,7 +398,7 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun onTimerAdvanced(timer: TickTimer) = guarded("timer advance") { it.onTimerAdvanced(timer) }
+    fun onTimerAdvanced(timer: TickTimer) = runTask("timer advance") { it.onTimerAdvanced(timer) }
 
 
     @JvmStatic
@@ -467,9 +467,9 @@ object AfterimageHooks {
     }
 
     @JvmStatic
-    fun openWorkspace() = guarded("open workspace") { it.workspace.open() }
+    fun openWorkspace() = runTask("open workspace") { it.workspace.open() }
 
-    private inline fun guarded(what: String, action: (AfterimageRuntime) -> Unit) {
+    private inline fun runTask(what: String, action: (AfterimageRuntime) -> Unit) {
         val current = runtime ?: return
         try {
             action(current)

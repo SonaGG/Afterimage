@@ -46,6 +46,7 @@ import net.minecraft.entity.living.mob.monster.EndermanEntity
 import net.minecraft.text.LiteralText
 import org.apache.logging.log4j.LogManager
 import org.lwjgl.input.Keyboard
+import org.lwjgl.opengl.GL11
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -53,6 +54,7 @@ import java.nio.file.StandardCopyOption
 import java.util.*
 import kotlin.io.path.nameWithoutExtension
 import kotlin.math.abs
+import kotlin.math.pow
 
 class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
 
@@ -68,7 +70,7 @@ class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
     val cameraDriver = CameraDriver(minecraft, viewportPicker)
     val replayer = ReplayController(platform, cameraDriver)
     val workspace = WorkspaceHost(McGfx.gfx, McWorkspaceScreens(minecraft), platform.root.resolve("afterimage-workspace.ini")).also { host ->
-        host.applyViewport = { viewport -> org.lwjgl.opengl.GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]) }
+        host.applyViewport = { viewport -> GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]) }
     }
     val keybinds = AfterimageKeybinds(minecraft)
     val ffmpeg = FfmpegRuntime(platform.root)
@@ -305,7 +307,7 @@ class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
                 cameraDriver.scene.scroll(amount)
             } else {
                 val settings = cameraDriver.settings
-                settings.freeSpeed = (settings.freeSpeed * Math.pow(1.2, amount.toDouble())).coerceIn(0.5, 200.0)
+                settings.freeSpeed = (settings.freeSpeed * 1.2.pow(amount.toDouble())).coerceIn(0.5, 200.0)
             }
         }
         cameraDriver.scene.viewport = { workspace.currentWorldViewport() }

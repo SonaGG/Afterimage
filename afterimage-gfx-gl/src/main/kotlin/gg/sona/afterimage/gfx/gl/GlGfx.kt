@@ -83,7 +83,7 @@ class GlGfx(
     override fun createGizmoPass(): GizmoPass = GlGizmoPass(state, quad, blit, legacy, glslVersion, warn)
 
     override fun blit(source: Texture, target: Target?, viewport: Viewport, blend: Blend, filter: Filter) {
-        state.guarded {
+        state.withState {
             GlTarget.of(target).bind()
             GL11.glViewport(viewport.x, viewport.y, viewport.width, viewport.height)
             state.prepareShaderDraw()
@@ -139,7 +139,7 @@ class GlGfx(
     }
 
     override fun clear(target: Target?, red: Float, green: Float, blue: Float, alpha: Float, mask: ColorMask, depth: Boolean) {
-        state.guarded {
+        state.withState {
             GlTarget.of(target).bind()
             GL11.glDisable(GL11.GL_SCISSOR_TEST)
             if (mask == ColorMask.ALPHA) GL11.glColorMask(false, false, false, true) else GL11.glColorMask(true, true, true, true)

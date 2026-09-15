@@ -45,7 +45,7 @@ class GlGizmoPass(
         geometry: GizmoGeometry,
     ) {
         val framebuffer = GlTarget.of(target).framebuffer
-        state.guarded {
+        state.withState {
             GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer)
             state.prepareShaderDraw()
             GL11.glEnable(GL11.GL_BLEND)

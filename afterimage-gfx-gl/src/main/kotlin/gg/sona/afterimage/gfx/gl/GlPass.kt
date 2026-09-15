@@ -152,7 +152,7 @@ class GlFullscreenPass(
     private val uniforms = GlUniforms(program)
 
     override fun draw(target: Target?, viewport: Viewport, blend: Blend, bind: Uniforms.() -> Unit) {
-        state.guarded {
+        state.withState {
             GlTarget.of(target).bind()
             GL11.glViewport(viewport.x, viewport.y, viewport.width, viewport.height)
             state.prepareShaderDraw()

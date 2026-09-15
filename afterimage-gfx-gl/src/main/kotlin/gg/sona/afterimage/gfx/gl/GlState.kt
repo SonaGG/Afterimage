@@ -146,7 +146,7 @@ class GlState(private val legacy: Boolean) {
         GL11.glColorMask(true, true, true, true)
     }
 
-    fun <T> guarded(block: () -> T): T {
+    fun <T> withState(block: () -> T): T {
         push()
         try {
             return block()

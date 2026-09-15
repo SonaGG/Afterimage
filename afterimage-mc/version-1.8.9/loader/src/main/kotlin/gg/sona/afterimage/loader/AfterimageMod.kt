@@ -14,9 +14,9 @@ class AfterimageMod : ClientModInitializer {
     override fun onInitializeClient() {
         Protocol47Support.install()
         MinecraftClientEvents.READY.register { minecraft -> start(minecraft) }
-        MinecraftClientEvents.TICK_END.register { isolate("client tick") { runtime?.onClientTick() } }
-        MinecraftClientEvents.STOP.register { isolate("shutdown") { stop() } }
-        ClientConnectionEvents.DISCONNECT.register { isolate("disconnect") { runtime?.onDisconnect() } }
+        MinecraftClientEvents.TICK_END.register { runTask("client tick") { runtime?.onClientTick() } }
+        MinecraftClientEvents.STOP.register { runTask("shutdown") { stop() } }
+        ClientConnectionEvents.DISCONNECT.register { runTask("disconnect") { runtime?.onDisconnect() } }
     }
 
     private fun start(minecraft: Minecraft) {
@@ -34,7 +34,7 @@ class AfterimageMod : ClientModInitializer {
         current.shutdown()
     }
 
-    private inline fun isolate(what: String, action: () -> Unit) {
+    private inline fun runTask(what: String, action: () -> Unit) {
         try {
             action()
         } catch (error: Throwable) {
