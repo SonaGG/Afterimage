@@ -30,8 +30,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
         ImGui.dummy(0f, EditorFonts.px(2f))
         if (settings.mode != CameraMode.FREE) targetPicker(settings, control)
 
-        Widgets.header(settings.mode.label)
-        when (settings.mode) {
+        if (section(settings.mode.label, "camera.mode")) when (settings.mode) {
             CameraMode.FREE -> freeSettings(settings, control)
             CameraMode.FIRST_PERSON -> firstPersonSettings(settings, control)
             CameraMode.ORBIT -> orbitSettings(settings, control)
@@ -41,8 +40,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
 
         if (session != null) pathSection(session, control)
 
-        Widgets.header("Lens")
-        if (Widgets.beginProperties("lens")) {
+        if (section("Lens", "camera.lens", trailing = if (settings.overrideFov) String.format("%.0f°", settings.fov) else null) && Widgets.beginProperties("lens")) {
             Widgets.property("Override FOV")
             Widgets.toggle("##ovfov", settings.overrideFov)?.let {
                 settings.overrideFov = it
@@ -73,6 +71,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
             Widgets.toggle("##shakeevents", settings.shakeOnEvents)?.let { settings.shakeOnEvents = it }
             Widgets.endProperties()
         }
+        if (session != null) presets(session)
     }
 
     private fun quickKeyframeButton(session: EditorSession?, lane: ValueLane, value: Double) {
@@ -169,21 +168,17 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
             Widgets.toggle("##accel", settings.freeAcceleration)?.let { settings.freeAcceleration = it }
             Widgets.property("Easing", "Smooth starts and stops")
             Widgets.toggle("##easing", settings.freeEasing)?.let { settings.freeEasing = it }
-            Widgets.endProperties()
-        }
-        ImGui.dummy(0f, EditorFonts.px(4f))
-        Widgets.smallText("Lock movement (right-mouse fly/look)", EditorTheme.TEXT_DIM.u32)
-        if (Widgets.beginProperties("free-locks")) {
-            Widgets.property("X")
-            Widgets.toggle("##lockx", settings.lockX)?.let { settings.lockX = it }
-            Widgets.property("Y")
-            Widgets.toggle("##locky", settings.lockY)?.let { settings.lockY = it }
-            Widgets.property("Z")
-            Widgets.toggle("##lockz", settings.lockZ)?.let { settings.lockZ = it }
-            Widgets.property("Yaw")
-            Widgets.toggle("##lockyaw", settings.lockYaw)?.let { settings.lockYaw = it }
-            Widgets.property("Pitch")
-            Widgets.toggle("##lockpitch", settings.lockPitch)?.let { settings.lockPitch = it }
+            Widgets.property("Lock", "Locked axes ignore right-mouse fly and look input")
+            val gap = EditorFonts.px(4f)
+            if (Widgets.chipButton("lock-x", "X", settings.lockX)) settings.lockX = !settings.lockX
+            ImGui.sameLine(0f, gap)
+            if (Widgets.chipButton("lock-y", "Y", settings.lockY)) settings.lockY = !settings.lockY
+            ImGui.sameLine(0f, gap)
+            if (Widgets.chipButton("lock-z", "Z", settings.lockZ)) settings.lockZ = !settings.lockZ
+            ImGui.sameLine(0f, gap)
+            if (Widgets.chipButton("lock-yaw", "Yaw", settings.lockYaw)) settings.lockYaw = !settings.lockYaw
+            ImGui.sameLine(0f, gap)
+            if (Widgets.chipButton("lock-pitch", "Pitch", settings.lockPitch)) settings.lockPitch = !settings.lockPitch
             Widgets.endProperties()
         }
         if (Widgets.ghostButton("Snap to recorder")) {
@@ -336,18 +331,13 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
         val settings = control.settings
         val camera = session.project.camera
         val lane = session.project.lane(LaneKind.CAMERA)
-        Widgets.header("Camera path")
-        when {
-            control.pathActive -> Widgets.pill("Following path", EditorTheme.ACCENT_TEXT)
-            lane.muted -> Widgets.pill("Path disabled", EditorTheme.TEXT_MUTED)
-            else -> Widgets.smallText(
-                "Playhead is outside ${TimeFormat.short(camera.startNanos)} to ${
-                    TimeFormat.short(
-                        camera.endNanos
-                    )
-                }.", EditorTheme.TEXT_DIM.u32
-            )
+        val state = when {
+            control.pathActive -> "Following"
+            lane.muted -> "Disabled"
+            camera.isEmpty -> "Empty"
+            else -> "Outside ${TimeFormat.short(camera.startNanos)} to ${TimeFormat.short(camera.endNanos)}"
         }
+        if (!section("Camera path", "camera.path", trailing = state)) return
         if (Widgets.accentButton("Add keyframe")) session.keyframeAtPlayhead(control.currentPose())
         Widgets.tooltip("Record the current view as a keyframe at the playhead  Ctrl+K")
         ImGui.sameLine()
@@ -423,7 +413,6 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
                 ?.let { settings.pathToleranceBlocks = it }
             Widgets.endProperties()
         }
-        presets(session)
     }
 
     private fun bakeView(session: EditorSession, control: CameraControl) {
@@ -458,7 +447,6 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
     }
 
     private fun presets(session: EditorSession) {
-        if (!Widgets.section("Saved paths", false)) return
         val store = PathPresets(
             context.host.projectsDirectory.resolve(
                 session.project.recording.fileName.toString().substringBeforeLast('.') + ".paths"
@@ -469,6 +457,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
             presetsDirty = false
         }
         val names = presetNames ?: emptyList()
+        if (!Widgets.foldout("Saved paths", "camera.paths", context.ui.collapsedSections, false, if (names.isEmpty()) null else "${names.size}")) return
         val saveWidth = Widgets.buttonWidth("Save##path", Widgets.ButtonStyle.ACCENT)
         ImGui.setNextItemWidth(-(saveWidth + ImGui.getStyle().itemSpacingX))
         if (ImGui.inputTextWithHint(
@@ -487,38 +476,52 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
             Widgets.smallText("No saved paths yet.", EditorTheme.TEXT_DIM.u32)
             return
         }
+        ImGui.dummy(0f, EditorFonts.px(2f))
+        val rowHeight = EditorFonts.px(26f)
+        val button = EditorFonts.px(22f)
         for (name in names) {
             ImGui.pushID(name)
             try {
-                ImGui.alignTextToFramePadding()
-                ImGui.textUnformatted(name)
-                ImGui.sameLine()
-                Widgets.rightAlign(ImGui.getFrameHeight(), ImGui.getFrameHeight(), spacing = ImGui.getStyle().itemSpacingX)
-                if (Widgets.iconButton("load", Icon.FOLDER, ImGui.getFrameHeight(), "Load this path")) {
-                    val loaded = store.load(name)
-                    if (loaded != null) {
-                        session.execute(ReplaceCameraPath(loaded, "Load path '$name'"))
-                        session.selection = Selection.NONE
-                        context.status("Loaded path $name")
+                val top = ImGui.getCursorScreenPosY()
+                val width = ImGui.getContentRegionAvailX()
+                val clicked = Widgets.row("preset", rowHeight, false) { x, y, _, _ ->
+                    val list = ImGui.getWindowDrawList()
+                    val iconSize = EditorFonts.px(14f)
+                    Icons.draw(list, Icon.PATH, x + EditorFonts.px(8f), y + (rowHeight - iconSize) / 2f, iconSize, EditorTheme.TEXT_MUTED.u32)
+                    list.addText(
+                        x + EditorFonts.px(30f),
+                        y + (rowHeight - ImGui.getFontSize()) / 2f,
+                        EditorTheme.TEXT.u32,
+                        Widgets.clip(name, width - EditorFonts.px(30f) - button * 2f - EditorFonts.px(16f))
+                    )
+                }
+                if (clicked) loadPreset(session, store, name)
+                val hovered = ImGui.isItemHovered()
+                ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX() + width - button * 2f - EditorFonts.px(8f), top + (rowHeight - button) / 2f)
+                if (hovered || ImGui.isMouseHoveringRect(ImGui.getCursorScreenPosX(), top, ImGui.getCursorScreenPosX() + button * 2f + EditorFonts.px(4f), top + rowHeight)) {
+                    if (Widgets.iconButton("load", Icon.FOLDER, button, "Load this path", iconScale = 0.55f, color = EditorTheme.TEXT_MUTED.u32)) loadPreset(session, store, name)
+                    ImGui.sameLine(0f, EditorFonts.px(4f))
+                    if (Widgets.iconButton("delete", Icon.TRASH, button, "Delete this saved path", iconScale = 0.55f, color = EditorTheme.RECORD.u32)) {
+                        store.delete(name)
+                        presetsDirty = true
                     }
                 }
-                ImGui.sameLine()
-                if (Widgets.iconButton(
-                        "delete",
-                        Icon.TRASH,
-                        ImGui.getFrameHeight(),
-                        "Delete this saved path",
-                        color = EditorTheme.RECORD.u32
-                    )
-                ) {
-                    store.delete(name)
-                    presetsDirty = true
-                }
+                ImGui.setCursorScreenPos(ImGui.getCursorScreenPosX(), top + rowHeight + ImGui.getStyle().itemSpacingY)
             } finally {
                 ImGui.popID()
             }
         }
     }
+
+    private fun loadPreset(session: EditorSession, store: PathPresets, name: String) {
+        val loaded = store.load(name) ?: return
+        session.execute(ReplaceCameraPath(loaded, "Load path '$name'"))
+        session.selection = Selection.NONE
+        context.status("Loaded path $name")
+    }
+
+    private fun section(title: String, key: String, trailing: String? = null): Boolean =
+        Widgets.foldout(title, key, context.ui.collapsedSections, true, trailing)
 
     private fun savePreset(session: EditorSession, store: PathPresets) {
         val name = presetName.get().trim()

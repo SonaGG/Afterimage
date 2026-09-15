@@ -57,21 +57,23 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
     }
 
     private fun header(icon: Icon, text: String, chips: List<String>, iconColor: Int = EditorTheme.ACCENT_TEXT.u32) {
-        val size = EditorFonts.px(30f)
+        val size = EditorFonts.px(36f)
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
         val list = ImGui.getWindowDrawList()
-        list.addRectFilled(x, y, x + size, y + size, EditorTheme.CONTROL.u32, EditorFonts.px(8f))
-        Icons.draw(list, icon, x + size * 0.22f, y + size * 0.22f, size * 0.56f, iconColor)
+        list.addRectFilled(x, y, x + size, y + size, EditorTheme.CONTROL.u32, EditorFonts.px(9f))
+        list.addRect(x, y, x + size, y + size, EditorTheme.BORDER_SOFT.u32, EditorFonts.px(9f), 0, 1f)
+        Icons.draw(list, icon, x + size * 0.25f, y + size * 0.25f, size * 0.5f, iconColor)
         ImGui.dummy(size, size)
         ImGui.sameLine(0f, EditorFonts.px(10f))
         ImGui.beginGroup()
+        ImGui.setCursorPosY(ImGui.getCursorPosY() + EditorFonts.px(1f))
         EditorFonts.with(EditorFonts.heading) {
             ImGui.textUnformatted(Widgets.clip(text, ImGui.getContentRegionAvailX()))
         }
-        if (chips.isNotEmpty()) Widgets.chips(chips, lineHeight = EditorFonts.px(18f))
+        if (chips.isNotEmpty()) Widgets.chips(chips, lineHeight = EditorFonts.px(18f), background = EditorTheme.TEXT.u32(0.07f))
         ImGui.endGroup()
-        ImGui.dummy(0f, EditorFonts.px(4f))
+        ImGui.dummy(0f, EditorFonts.px(6f))
     }
 
     private fun section(title: String, key: String, defaultOpen: Boolean = true, trailing: String? = null): Boolean =
@@ -210,14 +212,8 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
 
     private fun nudgeRow(session: EditorSession, times: Set<Long>) {
         val frameNanos = context.timeline.frameNanos()
-        val width = (ImGui.getContentRegionAvailX() - EditorFonts.px(6f) * 3f) / 4f
-        if (Widgets.button("-1 s", width)) nudge(session, times, -Nanos.PER_SECOND)
-        ImGui.sameLine()
-        if (Widgets.button("-1 f", width)) nudge(session, times, -frameNanos)
-        ImGui.sameLine()
-        if (Widgets.button("+1 f", width)) nudge(session, times, frameNanos)
-        ImGui.sameLine()
-        if (Widgets.button("+1 s", width)) nudge(session, times, Nanos.PER_SECOND)
+        val deltas = listOf(-Nanos.PER_SECOND, -frameNanos, frameNanos, Nanos.PER_SECOND)
+        Widgets.buttonGroup("nudge", NUDGE_LABELS, NUDGE_TOOLTIPS)?.let { nudge(session, times, deltas[it]) }
     }
 
     private fun lookThrough(pose: CameraPose) {
@@ -744,18 +740,15 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             ),
             sameLine = true
         )
+        val modes = listOf(CameraMode.FIRST_PERSON, CameraMode.ORBIT, CameraMode.FOLLOW, CameraMode.CHASE)
         if (section("Camera", "entity.camera", trailing = if (targeted) settings.mode.label else null)) {
-            val modes = listOf(CameraMode.FIRST_PERSON, CameraMode.ORBIT, CameraMode.FOLLOW, CameraMode.CHASE)
-            Widgets.segmented("entity-mode", modes.map { it.label }, if (targeted) modes.indexOf(settings.mode) else -1, 0f)
-                ?.let { EntityActions.setMode(context, modes[it], ref) }
-            Widgets.smallText("Look at this entity through a camera mode, from now on.", EditorTheme.TEXT_DIM.u32)
-        }
-        if (section("View keyframe", "entity.view", defaultOpen = false)) {
-            Widgets.smallText("Switch the camera to this entity from the playhead on.", EditorTheme.TEXT_DIM.u32)
-            val modes = listOf(CameraMode.FIRST_PERSON, CameraMode.ORBIT, CameraMode.FOLLOW, CameraMode.CHASE)
-            for ((index, mode) in modes.withIndex()) {
-                if (index > 0) ImGui.sameLine()
-                if (Widgets.ghostButton("${mode.label}##vk")) EntityActions.viewKeyframe(context, mode, ref)
+            if (Widgets.beginProperties("entity-camera")) {
+                Widgets.property("View through", "Look at this entity through a camera mode, from now on")
+                Widgets.segmented("entity-mode", modes.map { it.label }, if (targeted) modes.indexOf(settings.mode) else -1, 0f)
+                    ?.let { EntityActions.setMode(context, modes[it], ref) }
+                Widgets.property("View keyframe", "Switch the camera to this entity from the playhead on")
+                Widgets.buttonGroup("entity-view-key", modes.map { it.label })?.let { EntityActions.viewKeyframe(context, modes[it], ref) }
+                Widgets.endProperties()
             }
         }
         if (section("Details", "entity.details")) {
@@ -965,18 +958,16 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         set: (Easing) -> Unit,
     ) {
         if (!section("Easing", key, trailing = if (next) easing.label else "Last keyframe")) return
-        val width = (ImGui.getContentRegionAvailX() - EditorFonts.px(6f) * 3f) / 4f
-        if (Widgets.button("Ease", width)) session.execute(EaseKeyframes.easyEase(times, keys))
-        Widgets.tooltip("Slow into and out of the selected keyframes  F9")
-        ImGui.sameLine()
-        if (Widgets.button("Ease in", width)) session.execute(EaseKeyframes.easeIn(times, keys))
-        Widgets.tooltip("Slow down arriving at the selected keyframes  Shift+F9")
-        ImGui.sameLine()
-        if (Widgets.button("Ease out", width)) session.execute(EaseKeyframes.easeOut(times, keys))
-        Widgets.tooltip("Start slowly leaving the selected keyframes  Ctrl+Shift+F9")
-        ImGui.sameLine()
-        if (Widgets.button("Linear", width)) session.execute(EaseKeyframes.linear(times, keys))
-        Widgets.tooltip("Straight speed through the selected keyframes")
+        Widgets.buttonGroup("ease-quick", EASE_LABELS, EASE_TOOLTIPS)?.let {
+            session.execute(
+                when (it) {
+                    0 -> EaseKeyframes.easyEase(times, keys)
+                    1 -> EaseKeyframes.easeIn(times, keys)
+                    2 -> EaseKeyframes.easeOut(times, keys)
+                    else -> EaseKeyframes.linear(times, keys)
+                }
+            )
+        }
         if (!next) {
             Widgets.wrappedText("Nothing follows the last keyframe, so there is no segment to ease.", EditorTheme.TEXT_DIM.u32)
             return
@@ -996,15 +987,10 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         if (all.size < 2) return
         val span = all.last() - all.first()
         if (!section("Time stretch", "keyframes.stretch", trailing = TimeFormat.short(span))) return
-        val width = (ImGui.getContentRegionAvailX() - EditorFonts.px(6f) * 3f) / 4f
-        for ((index, factor) in STRETCH_FACTORS.withIndex()) {
-            if (index > 0) ImGui.sameLine()
-            if (Widgets.button(STRETCH_LABELS[index], width)) {
-                val command = ScaleKeyframes(times, keys, all.first(), factor)
-                session.execute(command)
-                session.selection = Selection(keyframeTimes = command.resultTimes, valueKeys = command.resultValueKeys)
-            }
-            Widgets.tooltip("Stretch the selection in time around its first keyframe. Alt-drag the ends in the Graph Editor for free scaling.")
+        Widgets.buttonGroup("stretch", STRETCH_LABELS, STRETCH_TOOLTIPS)?.let {
+            val command = ScaleKeyframes(times, keys, all.first(), STRETCH_FACTORS[it])
+            session.execute(command)
+            session.selection = Selection(keyframeTimes = command.resultTimes, valueKeys = command.resultValueKeys)
         }
         if (Widgets.ghostButton("Reverse order")) session.execute(ReverseKeyframes(times, keys))
         Widgets.tooltip("Plays the selected keyframes backwards")
@@ -1019,6 +1005,16 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         )
         val STRETCH_FACTORS = listOf(0.5, 0.8, 1.25, 2.0)
         val STRETCH_LABELS = listOf("1/2", "4/5", "x1.25", "x2")
+        val STRETCH_TOOLTIPS = STRETCH_LABELS.map { "Stretch the selection in time around its first keyframe. Alt-drag the ends in the Graph Editor for free scaling." }
+        val NUDGE_LABELS = listOf("-1 s", "-1 f", "+1 f", "+1 s")
+        val NUDGE_TOOLTIPS = listOf("Move one second earlier", "Move one frame earlier", "Move one frame later", "Move one second later")
+        val EASE_LABELS = listOf("Ease", "Ease in", "Ease out", "Linear")
+        val EASE_TOOLTIPS = listOf(
+            "Slow into and out of the selected keyframes  F9",
+            "Slow down arriving at the selected keyframes  Shift+F9",
+            "Start slowly leaving the selected keyframes  Ctrl+Shift+F9",
+            "Straight speed through the selected keyframes"
+        )
         val VALUE_PRESETS = mapOf(
             ValueLane.SPEED to listOf(0.25, 0.5, 1.0, 2.0, 4.0),
             ValueLane.FOV to listOf(30.0, 50.0, 70.0, 90.0, 110.0),

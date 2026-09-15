@@ -10,6 +10,7 @@ import gg.sona.afterimage.world.GameNames
 import gg.sona.afterimage.world.WorldState
 import imgui.ImGui
 import imgui.flag.ImGuiMouseButton
+import imgui.flag.ImGuiStyleVar
 import imgui.flag.ImGuiWindowFlags
 import imgui.type.ImString
 
@@ -35,7 +36,6 @@ class HierarchyPanel(private val context: EditorContext) :
     private val toggled = context.ui.set("editor.hierarchy.toggled")
     private var rows: List<Row> = emptyList()
     private var lastRefreshNanos = 0L
-    private var contextKeyframe: Long? = null
 
     override fun content(frame: FrameContext) {
         val session = context.session
@@ -44,15 +44,14 @@ class HierarchyPanel(private val context: EditorContext) :
             Widgets.emptyState("No replay open", "Open one from the library", Icon.LIST)
             return
         }
-        Widgets.search("##hierarchy-search", filter, "Filter")
-        ImGui.dummy(0f, EditorFonts.px(2f))
+        toolbar()
         if (frame.nowNanos - lastRefreshNanos > REFRESH_NANOS || rows.isEmpty()) {
             lastRefreshNanos = frame.nowNanos
             rows = collect(replay.world, replay.names, context.host.camera.currentPose())
         }
         val query = filter.get().trim().lowercase()
         ImGui.beginChild("##hierarchy-tree", 0f, 0f, false, ImGuiWindowFlags.None)
-        ImGui.pushStyleVar(imgui.flag.ImGuiStyleVar.ItemSpacing, 0f, EditorFonts.px(1f))
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, 0f, EditorFonts.px(1f))
         try {
             project(session, query)
             cameraPath(session, query)
@@ -61,27 +60,48 @@ class HierarchyPanel(private val context: EditorContext) :
             markers(session, query)
             moments(session, query)
             people(session, query)
+            ImGui.dummy(0f, EditorFonts.px(8f))
         } finally {
             ImGui.popStyleVar()
         }
         ImGui.endChild()
     }
 
+    private fun toolbar() {
+        val button = ImGui.getFrameHeight()
+        val gap = EditorFonts.px(6f)
+        Widgets.search("##hierarchy-search", filter, "Filter", ImGui.getContentRegionAvailX() - button - gap)
+        ImGui.sameLine(0f, gap)
+        if (Widgets.iconButton("hierarchy-more", Icon.MORE, button, "Hierarchy options", iconScale = 0.55f, color = EditorTheme.TEXT_MUTED.u32)) {
+            ImGui.openPopup("hierarchy-menu")
+        }
+        if (Widgets.beginPopup("hierarchy-menu")) {
+            if (Menus.item("Expand all")) for (key in SECTIONS) toggled.toggle(key, key !in OPEN_BY_DEFAULT)
+            if (Menus.item("Collapse all")) for (key in SECTIONS) toggled.toggle(key, key in OPEN_BY_DEFAULT)
+            ImGui.separator()
+            if (Menus.item("Show all hidden entities", "", enabled = context.visuals.hiddenEntities.isNotEmpty())) context.visuals.hiddenEntities.clear()
+            Widgets.endPopup()
+        }
+        ImGui.dummy(0f, EditorFonts.px(4f))
+    }
+
     private fun project(session: EditorSession, query: String) {
         val name = session.project.name
         if (query.isNotEmpty() && !name.lowercase().contains(query)) return
         val selected = context.inspect == InspectTarget.Project && session.selection.isEmpty
-        if (node(
-                "project",
-                0,
-                Icon.FOLDER,
-                name,
-                EditorTheme.TEXT.u32,
-                selected,
-                false,
-                if (session.project.dirty) "edited" else ""
-            )
-        ) {
+        val clicked = item(
+            "project",
+            Icon.FOLDER,
+            EditorTheme.ACCENT_TEXT.u32,
+            name,
+            EditorTheme.TEXT.u32,
+            selected,
+            indent = false,
+            badge = if (session.project.dirty) "edited" else null,
+            badgeColor = EditorTheme.WARNING.u32,
+            badgeBackground = EditorTheme.WARNING.u32(0.16f),
+        )
+        if (clicked) {
             session.selection = Selection.NONE
             context.selectedEntityId = null
             context.inspect = InspectTarget.Project
@@ -97,20 +117,17 @@ class HierarchyPanel(private val context: EditorContext) :
         if (query.isNotEmpty() && matching.isEmpty() && !"camera path".contains(query)) return
         val open = isOpen("path") || query.isNotEmpty()
         val laneSelected = context.inspect == InspectTarget.Lane(LaneKind.CAMERA) && session.selection.isEmpty
-        val clicked = node(
+        val clicked = section(
             "path",
-            0,
-            Icon.PATH,
-            "Camera Path",
-            if (lane.muted) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT.u32,
-            laneSelected,
-            keyframes.isNotEmpty(),
+            "Camera path",
             "${keyframes.size}",
-            open,
-            eye = !lane.muted
-        ) { visible ->
-            session.execute(SetLaneState(LaneKind.CAMERA, lane.copy(muted = !visible)))
-        }
+            expandable = keyframes.isNotEmpty(),
+            open = open,
+            selected = laneSelected,
+            selectable = true,
+            dim = lane.muted,
+            eye = !lane.muted,
+        ) { visible -> session.execute(SetLaneState(LaneKind.CAMERA, lane.copy(muted = !visible))) }
         if (clicked) {
             session.selection = Selection.NONE
             context.selectedEntityId = null
@@ -123,16 +140,15 @@ class HierarchyPanel(private val context: EditorContext) :
             val atPlayhead = Math.abs(keyframe.timeNanos - playhead) < 5_000_000L
             ImGui.pushID(keyframe.timeNanos.toString())
             try {
-                val clickedRow = node(
+                val clickedRow = item(
                     "kf",
-                    1,
                     Icon.KEYFRAME,
-                    TimeFormat.clock(keyframe.timeNanos),
                     EditorTheme.modeColor(keyframe.mode).u32,
+                    TimeFormat.clock(keyframe.timeNanos),
+                    if (lane.muted) EditorTheme.TEXT_MUTED.u32 else EditorTheme.TEXT.u32,
                     selected,
-                    false,
-                    if (atPlayhead) "playhead" else keyframe.mode.label.lowercase(),
-                    iconColor = EditorTheme.modeColor(keyframe.mode).u32
+                    trailing = keyframe.mode.label,
+                    dot = if (atPlayhead) EditorTheme.SELECTION.u32 else null,
                 )
                 if (clickedRow) {
                     val io = ImGui.getIO()
@@ -148,11 +164,10 @@ class HierarchyPanel(private val context: EditorContext) :
                     if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) session.replay?.seek(keyframe.timeNanos)
                 }
                 if (ImGui.isItemClicked(ImGuiMouseButton.Right)) {
-                    contextKeyframe = keyframe.timeNanos
                     if (!selected) session.selection = Selection(keyframeTimes = setOf(keyframe.timeNanos))
                     ImGui.openPopup("kf-menu")
                 }
-                if (ImGui.beginPopup("kf-menu")) {
+                if (Widgets.beginPopup("kf-menu")) {
                     val targets = session.selection.keyframeTimes.ifEmpty { setOf(keyframe.timeNanos) }
                     if (Menus.item("Go to keyframe")) session.replay?.seek(keyframe.timeNanos)
                     if (Menus.item("Frame in scene", "F")) context.host.camera.frame(
@@ -166,7 +181,7 @@ class HierarchyPanel(private val context: EditorContext) :
                         session.execute(RemoveKeyframes(targets))
                         session.selection = Selection.NONE
                     }
-                    ImGui.endPopup()
+                    Widgets.endPopup()
                 }
             } finally {
                 ImGui.popID()
@@ -183,41 +198,27 @@ class HierarchyPanel(private val context: EditorContext) :
         )
         lanes += Triple(LaneKind.VIEW, "View", session.project.views.keyframes.size)
         lanes += Triple(LaneKind.TEXTURE_PACK, "Texture pack", session.project.packs.keyframes.size)
-        val visible = lanes.filter { (kind, label, count) -> count > 0 || kind in context.timeline.shownLanes }
+        val visible = lanes.filter { (kind, _, count) -> count > 0 || kind in context.timeline.shownLanes }
             .filter { query.isEmpty() || it.second.lowercase().contains(query) }
         if (visible.isEmpty()) return
         val open = isOpen("tracks") || query.isNotEmpty()
-        if (node(
-                "tracks",
-                0,
-                Icon.SLIDERS,
-                "Tracks",
-                EditorTheme.TEXT.u32,
-                false,
-                true,
-                "${visible.size}",
-                open
-            )
-        ) toggle("tracks")
+        section("tracks", "Tracks", "${visible.size}", expandable = true, open = open)
         if (!open) return
         for ((kind, label, count) in visible) {
             val state = session.project.lane(kind)
             val selected = context.inspect == InspectTarget.Lane(kind) && session.selection.isEmpty
             ImGui.pushID(kind.name)
             try {
-                val clicked = node(
+                val clicked = item(
                     "lane",
-                    1,
                     LANE_ICONS[kind] ?: Icon.SLIDERS,
+                    if (state.muted) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT_MUTED.u32,
                     label,
-                    if (state.muted) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT.u32,
+                    if (state.muted) EditorTheme.TEXT_MUTED.u32 else EditorTheme.TEXT.u32,
                     selected,
-                    false,
-                    "$count",
-                    eye = !state.muted
-                ) { visibleNow ->
-                    session.execute(SetLaneState(kind, state.copy(muted = !visibleNow)))
-                }
+                    trailing = if (count == 0) "empty" else "$count",
+                    eye = !state.muted,
+                ) { visibleNow -> session.execute(SetLaneState(kind, state.copy(muted = !visibleNow))) }
                 if (clicked) {
                     session.selection = Selection.NONE
                     context.selectedEntityId = null
@@ -235,40 +236,27 @@ class HierarchyPanel(private val context: EditorContext) :
         val matching = clips.filter { query.isEmpty() || it.title.lowercase().contains(query) }
         if (query.isNotEmpty() && matching.isEmpty()) return
         val open = isOpen("clips") || query.isNotEmpty()
-        if (node(
-                "clips",
-                0,
-                Icon.FILM,
-                "Clips",
-                EditorTheme.TEXT.u32,
-                false,
-                clips.isNotEmpty(),
-                "${clips.size}",
-                open
-            )
-        ) toggle("clips")
+        section("clips", "Clips", "${clips.size}", expandable = clips.isNotEmpty(), open = open, dim = clips.isEmpty())
         if (!open) return
         for (clip in matching) {
             val selected = clip.id in session.selection.clipIds
             ImGui.pushID(clip.id.toString())
             try {
-                if (node(
+                if (item(
                         "clip",
-                        1,
                         Icon.FILM,
+                        EditorTheme.CLIP_SELECTED.u32,
                         clip.title,
                         EditorTheme.TEXT.u32,
                         selected,
-                        false,
-                        TimeFormat.short(clip.durationNanos),
-                        iconColor = EditorTheme.CLIP_SELECTED.u32
+                        trailing = TimeFormat.short(clip.durationNanos),
                     )
                 ) {
                     session.selection = session.selection.withClip(clip.id, ImGui.getIO().keyCtrl)
                     context.selectedEntityId = null
                     if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) ClipActions.play(session, clip)
                 }
-                if (ImGui.beginPopupContextItem("clip-menu")) {
+                if (Widgets.beginContextPopup("clip-menu")) {
                     if (Menus.item("Play")) ClipActions.play(session, clip)
                     if (Menus.item("Go to start")) session.replay?.seek(clip.startNanos)
                     ImGui.separator()
@@ -277,7 +265,7 @@ class HierarchyPanel(private val context: EditorContext) :
                         context.clips.delete(clip.id)
                         session.selection = Selection.NONE
                     }
-                    ImGui.endPopup()
+                    Widgets.endPopup()
                 }
             } finally {
                 ImGui.popID()
@@ -290,48 +278,30 @@ class HierarchyPanel(private val context: EditorContext) :
         val matching = markers.filter { query.isEmpty() || it.label.lowercase().contains(query) }
         if (query.isNotEmpty() && matching.isEmpty()) return
         val open = isOpen("markers") || query.isNotEmpty()
-        if (node(
-                "markers",
-                0,
-                Icon.MARKER,
-                "Markers",
-                EditorTheme.TEXT.u32,
-                false,
-                markers.isNotEmpty(),
-                "${markers.size}",
-                open
-            )
-        ) toggle("markers")
+        section("markers", "Markers", "${markers.size}", expandable = markers.isNotEmpty(), open = open, dim = markers.isEmpty())
         if (!open) return
         for (marker in matching) {
             val selected = marker.id in session.selection.markerIds
             ImGui.pushID(marker.id.toString())
             try {
-                if (node(
+                if (item(
                         "marker",
-                        1,
                         MARKER_ICONS[marker.kind] ?: Icon.MARKER,
+                        Widgets.rgbToU32(marker.color),
                         marker.label,
                         EditorTheme.TEXT.u32,
                         selected,
-                        false,
-                        TimeFormat.short(marker.nanos),
-                        iconColor = Widgets.rgbToU32(marker.color)
+                        trailing = TimeFormat.short(marker.nanos),
                     )
                 ) {
                     session.selection = session.selection.withMarker(marker.id, ImGui.getIO().keyCtrl)
                     context.selectedEntityId = null
                     if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) session.replay?.seek(marker.nanos)
                 }
-                if (ImGui.beginPopupContextItem("marker-menu")) {
+                if (Widgets.beginContextPopup("marker-menu")) {
                     if (Menus.item("Go to marker")) session.replay?.seek(marker.nanos)
                     if (ImGui.beginMenu("Type")) {
-                        for (kind in MarkerKind.entries) if (Menus.item(
-                                kind.label,
-                                "",
-                                marker.kind == kind
-                            )
-                        ) session.execute(
+                        for (kind in MarkerKind.entries) if (Menus.item(kind.label, "", marker.kind == kind)) session.execute(
                             ReplaceMarker(
                                 marker.id,
                                 marker.copy(kind = kind, color = if (marker.kind == kind) marker.color else kind.color)
@@ -344,7 +314,55 @@ class HierarchyPanel(private val context: EditorContext) :
                         session.execute(RemoveMarker(marker.id))
                         session.selection = Selection.NONE
                     }
-                    ImGui.endPopup()
+                    Widgets.endPopup()
+                }
+            } finally {
+                ImGui.popID()
+            }
+        }
+    }
+
+    private fun moments(session: EditorSession, query: String) {
+        val all = MomentActions.all(session)
+        if (all.isEmpty()) return
+        val matching = all.filter {
+            query.isEmpty() || it.label.lowercase().contains(query) || it.kind.label.lowercase().contains(query)
+        }
+        if (query.isNotEmpty() && matching.isEmpty()) return
+        val open = isOpen("moments") || query.isNotEmpty()
+        val kept = session.project.moments.size
+        section(
+            "moments",
+            "Moments",
+            if (all.size > kept) "$kept + ${all.size - kept}" else "$kept",
+            expandable = true,
+            open = open
+        )
+        if (!open) return
+        for (moment in matching) {
+            val selected = moment.id in session.selection.momentIds
+            val isKept = MomentActions.isKept(session, moment)
+            ImGui.pushID(moment.id.toString())
+            try {
+                if (item(
+                        "moment",
+                        Icon.BOOKMARK,
+                        Widgets.rgbToU32(moment.kind.color, if (isKept) 1f else 0.55f),
+                        moment.label,
+                        if (isKept) EditorTheme.TEXT.u32 else EditorTheme.TEXT_MUTED.u32,
+                        selected,
+                        trailing = TimeFormat.short(moment.peakNanos),
+                    )
+                ) {
+                    session.selection = session.selection.withMoment(moment.id, ImGui.getIO().keyCtrl)
+                    context.selectedEntityId = null
+                    if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) MomentActions.play(session, moment)
+                    else session.replay?.seek(moment.peakNanos)
+                }
+                if (ImGui.isItemClicked(ImGuiMouseButton.Right)) momentRename.set(moment.label)
+                if (Widgets.beginContextPopup("moment-menu")) {
+                    MomentActions.menu(context, session, moment, momentRename)
+                    Widgets.endPopup()
                 }
             } finally {
                 ImGui.popID()
@@ -361,100 +379,17 @@ class HierarchyPanel(private val context: EditorContext) :
             others.filter { query.isEmpty() || it.name.lowercase().contains(query) || it.kind.contains(query) }
         if (matchingPlayers.isNotEmpty() || query.isEmpty()) {
             val open = isOpen("players") || query.isNotEmpty()
-            if (node(
-                    "players",
-                    0,
-                    Icon.PERSON,
-                    "Players",
-                    EditorTheme.TEXT.u32,
-                    false,
-                    players.isNotEmpty(),
-                    "${players.size}",
-                    open
-                )
-            ) toggle("players")
-            if (open) for (row in matchingPlayers) entityRow(
-                session,
-                row,
-                if (row.isRecorder) Icon.USER else Icon.PERSON
-            )
+            section("players", "Players", "${players.size}", expandable = players.isNotEmpty(), open = open, dim = players.isEmpty())
+            if (open) for (row in matchingPlayers) entityRow(session, row, if (row.isRecorder) Icon.USER else Icon.PERSON)
         }
         if (matchingOthers.isNotEmpty() || query.isEmpty()) {
             val open = isOpen("entities") || query.isNotEmpty()
-            if (node(
-                    "entities",
-                    0,
-                    Icon.CUBE,
-                    "Entities",
-                    EditorTheme.TEXT.u32,
-                    false,
-                    others.isNotEmpty(),
-                    "${others.size}",
-                    open
-                )
-            ) toggle("entities")
+            section("entities", "Entities", "${others.size}", expandable = others.isNotEmpty(), open = open, dim = others.isEmpty())
             if (open) for (row in matchingOthers.take(MAX_ENTITIES)) entityRow(session, row, Icon.CUBE)
             if (open && matchingOthers.size > MAX_ENTITIES) {
-                ImGui.setCursorPosX(ImGui.getCursorPosX() + EditorFonts.px(34f))
-                Widgets.smallText(
-                    "${matchingOthers.size - MAX_ENTITIES} more, filter to find them",
-                    EditorTheme.TEXT_DIM.u32
-                )
-            }
-        }
-    }
-
-    private fun moments(session: EditorSession, query: String) {
-        val all = MomentActions.all(session)
-        if (all.isEmpty()) return
-        val matching = all.filter {
-            query.isEmpty() || it.label.lowercase().contains(query) || it.kind.label.lowercase().contains(query)
-        }
-        if (query.isNotEmpty() && matching.isEmpty()) return
-        val open = isOpen("moments") || query.isNotEmpty()
-        val kept = session.project.moments.size
-        if (node(
-                "moments",
-                0,
-                Icon.BOOKMARK,
-                "Moments",
-                EditorTheme.TEXT.u32,
-                false,
-                true,
-                if (all.size > kept) "$kept + ${all.size - kept}" else "$kept",
-                open
-            )
-        ) toggle("moments")
-        if (!open) return
-        for (moment in matching) {
-            val selected = moment.id in session.selection.momentIds
-            val isKept = MomentActions.isKept(session, moment)
-            ImGui.pushID(moment.id.toString())
-            try {
-                if (node(
-                        "moment",
-                        1,
-                        Icon.BOOKMARK,
-                        moment.label,
-                        if (isKept) EditorTheme.TEXT.u32 else EditorTheme.TEXT_MUTED.u32,
-                        selected,
-                        false,
-                        TimeFormat.short(moment.peakNanos),
-                        iconColor = Widgets.rgbToU32(moment.kind.color, if (isKept) 1f else 0.55f)
-                    )
-                ) {
-                    session.selection = session.selection.withMoment(moment.id, ImGui.getIO().keyCtrl)
-                    context.selectedEntityId = null
-                    if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) MomentActions.play(session, moment)
-                    else session.replay?.seek(moment.peakNanos)
-                }
-                if (ImGui.isItemClicked(ImGuiMouseButton.Right)) momentRename.set(moment.label)
-                if (ImGui.beginPopupContextItem("moment-menu")) {
-                    MomentActions.menu(context, session, moment, momentRename)
-                    ImGui.endPopup()
-                }
-            } finally {
-                ImGui.popID()
+                ImGui.dummy(0f, EditorFonts.px(2f))
+                ImGui.setCursorPosX(ImGui.getCursorPosX() + CHILD_INDENT)
+                Widgets.smallText("${matchingOthers.size - MAX_ENTITIES} more, filter to find them", EditorTheme.TEXT_DIM.u32)
             }
         }
     }
@@ -464,24 +399,28 @@ class HierarchyPanel(private val context: EditorContext) :
         val hidden = context.visuals.isHidden(row.id)
         val settings = context.host.camera.settings
         val targeted = if (row.isRecorder) settings.targetsRecorder() else settings.targetEntityId == row.id
+        val viewing = targeted && settings.mode != CameraMode.FREE
         val trailing = when {
-            targeted && settings.mode != CameraMode.FREE -> settings.mode.label.lowercase()
+            viewing -> settings.mode.label
             row.distance < 1000 -> String.format("%.0f m", row.distance)
             else -> "far"
         }
         ImGui.pushID(row.id)
         try {
-            val clicked = node(
+            val clicked = item(
                 "entity",
-                1,
                 icon,
+                when {
+                    row.isRecorder -> EditorTheme.ACCENT_TEXT.u32
+                    hidden -> EditorTheme.TEXT_DIM.u32
+                    else -> EditorTheme.TEXT_MUTED.u32
+                },
                 row.name,
                 if (hidden) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT.u32,
                 selected,
-                false,
-                trailing,
-                iconColor = if (row.isRecorder) EditorTheme.ACCENT_TEXT.u32 else if (hidden) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT_MUTED.u32,
-                eye = if (row.isRecorder) null else !hidden
+                trailing = trailing,
+                trailingColor = if (viewing) EditorTheme.ACCENT_TEXT.u32 else EditorTheme.TEXT_DIM.u32,
+                eye = if (row.isRecorder) null else !hidden,
             ) { visible ->
                 val set = context.visuals.hiddenEntities
                 if (visible) set.remove(row.id) else set.add(row.id)
@@ -490,9 +429,9 @@ class HierarchyPanel(private val context: EditorContext) :
                 context.selectEntity(row.id, row.name, row.isPlayer, row.isRecorder, row.uuid)
                 if (ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) EntityActions.flyTo(context, ref(row))
             }
-            if (ImGui.beginPopupContextItem("entity-menu")) {
+            if (Widgets.beginContextPopup("entity-menu")) {
                 EntityActions.menu(context, ref(row))
-                ImGui.endPopup()
+                Widgets.endPopup()
             }
         } finally {
             ImGui.popID()
@@ -508,85 +447,136 @@ class HierarchyPanel(private val context: EditorContext) :
 
     private fun isOpen(key: String): Boolean = (key in OPEN_BY_DEFAULT) != (key in toggled)
 
-    private fun node(
-        id: String,
-        depth: Int,
-        icon: Icon,
-        label: String,
-        color: Int,
-        selected: Boolean,
+    private fun section(
+        key: String,
+        title: String,
+        count: String,
         expandable: Boolean,
-        trailing: String,
-        open: Boolean = false,
-        iconColor: Int = EditorTheme.TEXT_MUTED.u32,
+        open: Boolean,
+        selected: Boolean = false,
+        selectable: Boolean = false,
+        dim: Boolean = false,
         eye: Boolean? = null,
         onEye: ((Boolean) -> Unit)? = null,
     ): Boolean {
-        val height = ROW_HEIGHT
+        if (ImGui.getCursorPosY() > EditorFonts.px(4f)) ImGui.dummy(0f, EditorFonts.px(8f))
+        val height = SECTION_HEIGHT
         var chevronHit = false
         var eyeHit = false
-        val pressed = Widgets.row(id, height, selected) { x, y, width, hovered ->
+        val pressed = Widgets.row("section-$key", height, selected) { x, y, width, hovered ->
             val list = ImGui.getWindowDrawList()
-            val indent = EditorFonts.px(8f) + depth * EditorFonts.px(18f)
-            val chevron = EditorFonts.px(10f)
+            val chevron = EditorFonts.px(9f)
+            val chevronX = x + EditorFonts.px(6f)
             if (expandable) {
                 Icons.draw(
                     list,
                     if (open) Icon.CHEVRON_DOWN else Icon.CHEVRON_RIGHT,
-                    x + indent,
+                    chevronX,
                     y + (height - chevron) / 2f,
                     chevron,
-                    EditorTheme.TEXT_DIM.u32
+                    if (hovered) EditorTheme.TEXT_MUTED.u32 else EditorTheme.TEXT_DIM.u32
                 )
-                val cx = ImGui.getMousePosX()
-                val cy = ImGui.getMousePosY()
-                if (hovered && cx >= x + indent - EditorFonts.px(4f) && cx <= x + indent + chevron + EditorFonts.px(6f) && cy >= y && cy <= y + height && ImGui.isMouseClicked(
-                        ImGuiMouseButton.Left
-                    )
-                ) chevronHit = true
+                if (hovered && ImGui.getMousePosX() < x + CHILD_INDENT && ImGui.isMouseClicked(ImGuiMouseButton.Left)) chevronHit = true
             }
-            val iconSize = EditorFonts.px(14f)
-            val iconX = x + indent + chevron + EditorFonts.px(6f)
-            Icons.draw(list, icon, iconX, y + (height - iconSize) / 2f, iconSize, iconColor)
-            val textX = iconX + iconSize + EditorFonts.px(7f)
-            val eyeSize = EditorFonts.px(14f)
-            val eyeX = x + width - eyeSize - EditorFonts.px(8f)
-            var rightEdge = x + width - EditorFonts.px(8f)
-            if (eye != null) {
-                val show = hovered || !eye
-                if (show) Icons.draw(
+            val textColor = when {
+                selected -> EditorTheme.TEXT.u32
+                dim -> EditorTheme.TEXT_DIM.u32
+                hovered -> EditorTheme.TEXT_MUTED.u32
+                else -> EditorTheme.TEXT_DIM.u32
+            }
+            EditorFonts.with(EditorFonts.label) {
+                list.addText(x + CHILD_INDENT, y + (height - ImGui.getFontSize()) / 2f, textColor, title.uppercase())
+            }
+            var right = x + width - EditorFonts.px(8f)
+            if (eye != null && (hovered || !eye)) {
+                val eyeSize = EditorFonts.px(13f)
+                val eyeX = right - eyeSize
+                Icons.draw(
                     list,
                     if (eye) Icon.EYE else Icon.EYE_OFF,
                     eyeX,
                     y + (height - eyeSize) / 2f,
                     eyeSize,
-                    if (eye) EditorTheme.TEXT_DIM.u32 else EditorTheme.WARNING.u32
+                    if (eye) EditorTheme.TEXT_MUTED.u32 else EditorTheme.WARNING.u32
                 )
-                rightEdge = eyeX - EditorFonts.px(6f)
-                val cx = ImGui.getMousePosX()
-                val cy = ImGui.getMousePosY()
-                if (hovered && cx >= eyeX - EditorFonts.px(4f) && cx <= eyeX + eyeSize + EditorFonts.px(4f) && cy >= y && cy <= y + height && ImGui.isMouseClicked(
-                        ImGuiMouseButton.Left
-                    )
-                ) {
+                if (hovered && ImGui.getMousePosX() >= eyeX - EditorFonts.px(6f) && ImGui.isMouseClicked(ImGuiMouseButton.Left)) {
                     onEye?.invoke(!eye)
                     eyeHit = true
                 }
+                right = eyeX - EditorFonts.px(8f)
             }
-            if (trailing.isNotEmpty()) {
-                EditorFonts.with(EditorFonts.small) {
-                    val trailingWidth = Widgets.textWidth(trailing)
-                    list.addText(
-                        rightEdge - trailingWidth,
-                        y + (height - ImGui.getFontSize()) / 2f,
-                        EditorTheme.TEXT_DIM.u32,
-                        trailing
-                    )
-                    rightEdge -= trailingWidth + EditorFonts.px(8f)
+            EditorFonts.with(EditorFonts.small) {
+                val countWidth = Widgets.textWidth(count)
+                list.addText(right - countWidth, y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT_DIM.u32, count)
+            }
+        }
+        if (eyeHit) return false
+        if (chevronHit || (pressed && !selectable)) {
+            if (expandable) toggle(key)
+            return false
+        }
+        return pressed && selectable
+    }
+
+    private fun item(
+        id: String,
+        icon: Icon,
+        iconColor: Int,
+        label: String,
+        color: Int,
+        selected: Boolean,
+        indent: Boolean = true,
+        trailing: String? = null,
+        trailingColor: Int = EditorTheme.TEXT_DIM.u32,
+        badge: String? = null,
+        badgeColor: Int = EditorTheme.TEXT_MUTED.u32,
+        badgeBackground: Int = EditorTheme.CONTROL.u32,
+        dot: Int? = null,
+        eye: Boolean? = null,
+        onEye: ((Boolean) -> Unit)? = null,
+    ): Boolean {
+        val height = ROW_HEIGHT
+        var eyeHit = false
+        val pressed = Widgets.row(id, height, selected) { x, y, width, hovered ->
+            val list = ImGui.getWindowDrawList()
+            val iconSize = EditorFonts.px(14f)
+            val iconX = x + if (indent) CHILD_INDENT else EditorFonts.px(8f)
+            Icons.draw(list, icon, iconX, y + (height - iconSize) / 2f, iconSize, iconColor)
+            val textX = iconX + iconSize + EditorFonts.px(8f)
+            var right = x + width - EditorFonts.px(8f)
+            val centerY = y + height / 2f
+            if (eye != null && (hovered || !eye)) {
+                val eyeSize = EditorFonts.px(13f)
+                val eyeX = right - eyeSize
+                Icons.draw(
+                    list,
+                    if (eye) Icon.EYE else Icon.EYE_OFF,
+                    eyeX,
+                    y + (height - eyeSize) / 2f,
+                    eyeSize,
+                    if (eye) EditorTheme.TEXT_MUTED.u32 else EditorTheme.WARNING.u32
+                )
+                if (hovered && ImGui.getMousePosX() >= eyeX - EditorFonts.px(6f) && ImGui.isMouseClicked(ImGuiMouseButton.Left)) {
+                    onEye?.invoke(!eye)
+                    eyeHit = true
                 }
+                right = eyeX - EditorFonts.px(8f)
+            }
+            if (badge != null) {
+                right -= Widgets.drawBadge(list, badge, right, centerY, badgeColor, badgeBackground) + EditorFonts.px(8f)
+            }
+            if (dot != null) {
+                val radius = EditorFonts.px(3f)
+                list.addCircleFilled(right - radius, centerY, radius, dot, 12)
+                right -= radius * 2f + EditorFonts.px(8f)
+            }
+            if (!trailing.isNullOrEmpty()) EditorFonts.with(EditorFonts.small) {
+                val trailingWidth = Widgets.textWidth(trailing)
+                list.addText(right - trailingWidth, y + (height - ImGui.getFontSize()) / 2f, trailingColor, trailing)
+                right -= trailingWidth + EditorFonts.px(8f)
             }
             val font = if (selected) EditorFonts.bodyMedium else EditorFonts.body
-            val clipped = EditorFonts.with(font) { Widgets.clip(label, maxOf(EditorFonts.px(20f), rightEdge - textX)) }
+            val clipped = EditorFonts.with(font) { Widgets.clip(label, maxOf(EditorFonts.px(20f), right - textX)) }
             list.addText(
                 font,
                 ImGui.getFontSize().toInt(),
@@ -596,16 +586,7 @@ class HierarchyPanel(private val context: EditorContext) :
                 clipped
             )
         }
-        if (eyeHit) return false
-        if (chevronHit) {
-            toggle(id)
-            return false
-        }
-        if (pressed && expandable && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left)) {
-            toggle(id)
-            return false
-        }
-        return pressed
+        return pressed && !eyeHit
     }
 
     private fun collect(shadow: WorldState, names: GameNames, camera: CameraPose): List<Row> {
@@ -659,6 +640,8 @@ class HierarchyPanel(private val context: EditorContext) :
 
     companion object {
         val ROW_HEIGHT: Float get() = EditorFonts.px(24f)
+        val SECTION_HEIGHT: Float get() = EditorFonts.px(22f)
+        val CHILD_INDENT: Float get() = EditorFonts.px(20f)
         val MARKER_ICONS = mapOf(
             MarkerKind.MOMENT to Icon.BOOKMARK,
             MarkerKind.SHOT to Icon.FILM,
@@ -667,6 +650,7 @@ class HierarchyPanel(private val context: EditorContext) :
             MarkerKind.CAMERA to Icon.CAMERA,
         )
         const val MAX_ENTITIES = 150
+        val SECTIONS = listOf("path", "tracks", "clips", "markers", "moments", "players", "entities")
         val OPEN_BY_DEFAULT = setOf("path", "players", "entities", "clips", "markers")
         val REFRESH_NANOS = 500_000_000L
         val LANE_ICONS = mapOf(

@@ -1,0 +1,17 @@
+package gg.sona.afterimage.mc26.mixin;
+
+import java.util.List;
+import net.minecraft.client.renderer.texture.SpriteContents;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.gen.Accessor;
+import org.spongepowered.asm.mixin.gen.Invoker;
+
+@Mixin(TextureAtlas.class)
+public interface TextureAtlasAccessor {
+    @Accessor("animatedTexturesStates")
+    List<SpriteContents.AnimationState> afterimage_animationStates();
+
+    @Invoker("uploadAnimationFrames")
+    void afterimage_uploadAnimationFrames();
+}

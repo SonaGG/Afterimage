@@ -85,7 +85,7 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
         ImGui.dummy(0f, EditorFonts.px(4f))
         val names = session.events.index?.playerNames.orEmpty()
         if (names.isNotEmpty()) {
-            Widgets.header("Players")
+            Widgets.sectionLabel("Players", "${names.size}")
             val gap = EditorFonts.px(4f)
             var lineStart = true
             for (name in names.take(24)) {
@@ -97,38 +97,48 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
                 if (Widgets.chipButton("player-$name", name, tooltipText = "Everything involving $name")) pendingQuery = "event player:$name"
             }
         }
-        Widgets.header("Try")
+        Widgets.sectionLabel("Suggestions")
         for ((index, example) in ReplaySearch.EXAMPLES.withIndex()) {
             val (text, description) = example
             if (Widgets.row("example-$index", EXAMPLE_HEIGHT, false) { x, y, width, hovered ->
                     val list = ImGui.getWindowDrawList()
                     val inset = EditorFonts.px(8f)
+                    val iconSize = EditorFonts.px(13f)
+                    Icons.draw(
+                        list,
+                        Icon.SEARCH,
+                        x + inset,
+                        y + (EXAMPLE_HEIGHT - iconSize) / 2f,
+                        iconSize,
+                        if (hovered) EditorTheme.TEXT_MUTED.u32 else EditorTheme.TEXT_DIM.u32
+                    )
+                    val textX = x + inset + iconSize + EditorFonts.px(9f)
+                    val textWidth = width - (textX - x) - inset
                     val top = y + (EXAMPLE_HEIGHT - ImGui.getFontSize() - EditorFonts.small.fontSize - EditorFonts.px(2f)) / 2f
                     list.addText(
                         EditorFonts.bodyMedium,
                         ImGui.getFontSize(),
-                        x + inset,
+                        textX,
                         top,
-                        if (hovered) EditorTheme.TEXT.u32 else EditorTheme.ACCENT_TEXT.u32,
-                        Widgets.clip(text, width - inset * 2f)
+                        EditorTheme.TEXT.u32,
+                        Widgets.clip(text, textWidth)
                     )
                     EditorFonts.with(EditorFonts.small) {
                         list.addText(
-                            x + inset,
+                            textX,
                             top + EditorFonts.body.fontSize + EditorFonts.px(2f),
                             EditorTheme.TEXT_DIM.u32,
-                            Widgets.clip(description, width - inset * 2f)
+                            Widgets.clip(description, textWidth)
                         )
                     }
                     if (hovered) Widgets.cursorHand()
                 }
             ) pendingQuery = text
         }
-        ImGui.dummy(0f, EditorFonts.px(4f))
-        Widgets.wrappedText(
-            "Filters: by:, on:, player:, near:, within:, min:, max:, after:, before:, text:. Conditions like health(me) < 8 find spans of time.",
-            EditorTheme.TEXT_DIM.u32
-        )
+        Widgets.sectionLabel("Filters")
+        Widgets.chips(FILTERS, lineHeight = EditorFonts.px(20f))
+        ImGui.dummy(0f, EditorFonts.px(2f))
+        Widgets.wrappedText("Conditions like health(me) < 8 find spans of time.", EditorTheme.TEXT_DIM.u32)
     }
 
     private fun error(current: SearchResult) {
@@ -144,28 +154,31 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
 
     private fun results(session: EditorSession, current: SearchResult) {
         val replay = session.replay ?: return
-        ImGui.dummy(0f, EditorFonts.px(2f))
+        ImGui.dummy(0f, EditorFonts.px(4f))
         val summary = when {
             current.hits.isEmpty() -> "No results"
             current.truncated -> "First ${current.hits.size} results"
             current.hits.size == 1 -> "1 result"
             else -> "${current.hits.size} results"
         }
-        Widgets.chips(listOf(summary, "${current.elapsedMillis} ms"))
+        val size = ImGui.getFrameHeight()
+        ImGui.alignTextToFramePadding()
+        EditorFonts.with(EditorFonts.bodyMedium) { ImGui.textUnformatted(summary) }
+        ImGui.sameLine(0f, EditorFonts.px(8f))
+        Widgets.chip("${current.elapsedMillis} ms", EditorTheme.TEXT_DIM.u32, EditorTheme.TEXT.u32(0.06f))
         if (current.hits.isNotEmpty()) {
-            val size = ImGui.getFrameHeight()
             val gap = EditorFonts.px(4f)
             ImGui.sameLine(0f, EditorFonts.px(8f))
             Widgets.rightAlign(size * 2f + gap, spacing = 0f)
-            if (Widgets.iconButton("results-markers", Icon.MARKER, size, "Add a marker at every result", iconScale = 0.55f)) markersFromResults(session, current)
+            if (Widgets.iconButton("results-markers", Icon.MARKER, size, "Add a marker at every result", iconScale = 0.55f, color = EditorTheme.TEXT_MUTED.u32)) markersFromResults(session, current)
             ImGui.sameLine(0f, gap)
-            if (Widgets.iconButton("results-clips", Icon.FILM, size, "Add a clip around every result, ready for a montage", iconScale = 0.55f)) clipsFromResults(session, current)
+            if (Widgets.iconButton("results-clips", Icon.FILM, size, "Add a clip around every result, ready for a montage", iconScale = 0.55f, color = EditorTheme.TEXT_MUTED.u32)) clipsFromResults(session, current)
         }
         if (current.hits.isEmpty()) {
             Widgets.emptyState("Nothing matched", "Try a wider filter or another player", Icon.SEARCH)
             return
         }
-        ImGui.dummy(0f, EditorFonts.px(2f))
+        ImGui.dummy(0f, EditorFonts.px(4f))
         keyboard(replay, current)
         if (ImGui.beginChild("results", 0f, 0f, false, ImGuiWindowFlags.None)) {
             for ((index, hit) in current.hits.withIndex()) {
@@ -204,19 +217,25 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
             val clicked = Widgets.row("hit", ROW_HEIGHT, index == selected) { x, y, width, hovered ->
                 val list = ImGui.getWindowDrawList()
                 val inset = EditorFonts.px(8f)
-                val iconSize = EditorFonts.px(14f)
-                Icons.draw(list, kindIcon(hit.kind), x + inset, y + (ROW_HEIGHT - iconSize) / 2f, iconSize, color)
+                val tile = EditorFonts.px(24f)
+                val iconSize = EditorFonts.px(13f)
+                val tileX = x + inset
+                val tileY = y + (ROW_HEIGHT - tile) / 2f
+                val tint = hit.kind?.let { Widgets.rgbToU32(kindRgb(it), 0.16f) } ?: EditorTheme.TEXT.u32(0.07f)
+                list.addRectFilled(tileX, tileY, tileX + tile, tileY + tile, tint, tile / 2f)
+                Icons.draw(list, kindIcon(hit.kind), tileX + (tile - iconSize) / 2f, tileY + (tile - iconSize) / 2f, iconSize, color)
                 val timeText = if (hit.isSpan) "${TimeFormat.short(hit.nanos)} to ${TimeFormat.short(hit.endNanos)}" else TimeFormat.clock(hit.nanos)
                 val timeWidth = EditorFonts.with(EditorFonts.smallMedium) { Widgets.textWidth(timeText) }
                 EditorFonts.with(EditorFonts.smallMedium) {
                     list.addText(
                         x + width - inset - timeWidth,
                         y + (ROW_HEIGHT - ImGui.getFontSize()) / 2f,
-                        if (atPlayhead) EditorTheme.SELECTION.u32 else EditorTheme.TEXT_MUTED.u32,
+                        if (atPlayhead) EditorTheme.SELECTION.u32 else EditorTheme.TEXT_DIM.u32,
                         timeText
                     )
                 }
-                val textX = x + inset + iconSize + EditorFonts.px(8f)
+                if (atPlayhead) list.addRectFilled(x, y + EditorFonts.px(8f), x + EditorFonts.px(2f), y + ROW_HEIGHT - EditorFonts.px(8f), EditorTheme.SELECTION.u32, 1f)
+                val textX = tileX + tile + EditorFonts.px(9f)
                 val textWidth = width - (textX - x) - timeWidth - inset - EditorFonts.px(10f)
                 val top = y + (ROW_HEIGHT - ImGui.getFontSize() - EditorFonts.small.fontSize - EditorFonts.px(2f)) / 2f
                 list.addText(textX, top, EditorTheme.TEXT.u32, Widgets.clip(hit.label, textWidth))
@@ -339,8 +358,9 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
     }
 
     private companion object {
-        val ROW_HEIGHT: Float get() = EditorFonts.px(38f)
-        val EXAMPLE_HEIGHT: Float get() = EditorFonts.px(36f)
+        val ROW_HEIGHT: Float get() = EditorFonts.px(40f)
+        val EXAMPLE_HEIGHT: Float get() = EditorFonts.px(38f)
+        val FILTERS = listOf("by:", "on:", "player:", "near:", "within:", "min:", "max:", "after:", "before:", "text:")
         val PRE_ROLL = Nanos.ofSeconds(8)
         val POST_ROLL = Nanos.ofSeconds(4)
         const val MAX_BATCH = 200
