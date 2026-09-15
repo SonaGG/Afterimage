@@ -77,8 +77,12 @@ class CameraDriver26(private val minecraft: Minecraft, private val picker: Viewp
     @Volatile
     var detached: Boolean = false
         private set
-    var hiddenEntityId: Int = Int.MIN_VALUE
-        private set
+    val hiddenEntityId: Int
+        get() = when {
+            settings.mode != CameraMode.FIRST_PERSON || !settings.hideTargetInFirstPerson -> Int.MIN_VALUE
+            settings.targetsRecorder() -> session?.shadow26?.localPlayer?.entityId ?: Int.MIN_VALUE
+            else -> settings.targetEntityId
+        }
     var recorderPerspective: Int = 0
         private set
     var recordedHud: () -> LocalScreen? = { null }
@@ -143,7 +147,6 @@ class CameraDriver26(private val minecraft: Minecraft, private val picker: Viewp
         release()
         detached = false
         pathActive = false
-        hiddenEntityId = Int.MIN_VALUE
         recorderPerspective = 0
         pendingMatrix = null
         pendingHand = null
@@ -166,11 +169,6 @@ class CameraDriver26(private val minecraft: Minecraft, private val picker: Viewp
         smoothedPose = null
         val firstPersonOfOther = settings.mode == CameraMode.FIRST_PERSON && !settings.targetsRecorder()
         detached = settings.mode != CameraMode.FREE && !firstPersonOfOther
-        hiddenEntityId = when {
-            settings.mode != CameraMode.FIRST_PERSON || !settings.hideTargetInFirstPerson -> Int.MIN_VALUE
-            settings.targetsRecorder() -> session?.shadow26?.localPlayer?.entityId ?: Int.MIN_VALUE
-            else -> settings.targetEntityId
-        }
         if (settings.mode == CameraMode.FREE) {
             if (minecraft.cameraEntity !== minecraft.player && minecraft.player != null) teleport(lastPose)
             release()

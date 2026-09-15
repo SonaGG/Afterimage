@@ -76,8 +76,12 @@ class CameraDriver(private val minecraft: Minecraft, picker: ViewportPicker) : C
     var detached: Boolean = false
         private set
 
-    var hiddenEntityId: Int = Int.MIN_VALUE
-        private set
+    val hiddenEntityId: Int
+        get() = when {
+            settings.mode != CameraMode.FIRST_PERSON || !settings.hideTargetInFirstPerson -> Int.MIN_VALUE
+            settings.targetsRecorder() -> session?.shadow?.localPlayer?.entityId ?: Int.MIN_VALUE
+            else -> settings.targetEntityId
+        }
 
     var recorderPerspective: Int = 0
         private set
@@ -124,7 +128,6 @@ class CameraDriver(private val minecraft: Minecraft, picker: ViewportPicker) : C
         release()
         detached = false
         pathActive = false
-        hiddenEntityId = Int.MIN_VALUE
         recorderPerspective = 0
         pendingMatrix = null
         if (hideGuiManaged) {
@@ -146,11 +149,6 @@ class CameraDriver(private val minecraft: Minecraft, picker: ViewportPicker) : C
         smoothedPose = null
         val firstPersonOfOther = settings.mode == CameraMode.FIRST_PERSON && !settings.targetsRecorder()
         detached = settings.mode != CameraMode.FREE && !firstPersonOfOther
-        hiddenEntityId = when {
-            settings.mode != CameraMode.FIRST_PERSON || !settings.hideTargetInFirstPerson -> Int.MIN_VALUE
-            settings.targetsRecorder() -> session?.shadow?.localPlayer?.entityId ?: Int.MIN_VALUE
-            else -> settings.targetEntityId
-        }
         if (settings.mode == CameraMode.FREE) {
             if (minecraft.camera !== minecraft.player && minecraft.player != null) teleport(lastPose)
             release()
