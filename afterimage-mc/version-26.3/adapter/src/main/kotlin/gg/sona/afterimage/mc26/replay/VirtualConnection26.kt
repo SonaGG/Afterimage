@@ -164,6 +164,7 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
         var payload = packet.payload
         if (!PacketIds26.isConfiguration(packet.packetId)) {
             when (wireId) {
+                PacketIds26.LOGIN -> dropStalePlayer()
                 PacketIds26.FORGET_LEVEL_CHUNK -> if (chunkCenter() != null) return
                 PacketIds26.LEVEL_CHUNK_WITH_LIGHT -> chunkCenter()?.let { center ->
                     val radius = chunkRadius() ?: return@let
@@ -195,6 +196,12 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
 
     override fun onSettled(positionNanos: Long, mode: DeliveryMode) {
         if (mode == DeliveryMode.SEEK && snapOnSeek()) snapEntities()
+    }
+
+    private fun dropStalePlayer() {
+        val player = minecraft.player ?: return
+        if (player.connection === handler) return
+        minecraft.player = null
     }
 
     fun replayEvent(packet: CapturedPacket) = onPacket(packet, DeliveryMode.LIVE)
