@@ -79,7 +79,7 @@ class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
     val gizmoRenderer = GizmoRenderer(minecraft)
     override val gizmos = GizmoBatch()
     override val version: String get() = VERSION
-    override val platformLabel: String get() = "Minecraft ${minecraft.gameVersion}"
+    override val platformLabel: String get() = "Minecraft 1.8.9"
     val recordingHud = RecordingHud(minecraft)
     private val images = ImageTextures(McGfx.gfx)
     val screenMirror = ScreenMirror(minecraft, cameraDriver) { replayer.session }
