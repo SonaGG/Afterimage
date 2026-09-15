@@ -8,10 +8,7 @@ import gg.sona.afterimage.core.time.Nanos
 import gg.sona.afterimage.editor.*
 import gg.sona.afterimage.editor.commands.*
 import gg.sona.afterimage.editor.host.RecordingInfo
-import gg.sona.afterimage.editor.pose.BodyPart
-import gg.sona.afterimage.editor.pose.PartPose
 import imgui.ImGui
-import imgui.flag.ImGuiCol
 import imgui.flag.ImGuiInputTextFlags
 import org.joml.Vector3d
 import java.nio.file.Files
@@ -23,6 +20,15 @@ import java.util.*
 import kotlin.math.abs
 
 class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspector", DockArea.RIGHT, Icon.SLIDERS) {
+
+    private class IconAction(
+        val id: String,
+        val icon: Icon,
+        val tooltip: String,
+        val color: Int = EditorTheme.TEXT.u32,
+        val enabled: Boolean = true,
+        val run: () -> Unit,
+    )
 
     private var infoPath: Path? = null
     private var info: RecordingInfo? = null
@@ -50,25 +56,41 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         }
     }
 
-    private fun title(
-        icon: Icon,
-        text: String,
-        subtitle: String? = null,
-        iconColor: Int = EditorTheme.ACCENT_TEXT.u32
-    ) {
-        val size = EditorFonts.px(28f)
+    private fun header(icon: Icon, text: String, chips: List<String>, iconColor: Int = EditorTheme.ACCENT_TEXT.u32) {
+        val size = EditorFonts.px(30f)
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
         val list = ImGui.getWindowDrawList()
-        list.addRectFilled(x, y, x + size, y + size, EditorTheme.CONTROL.u32, EditorFonts.px(7f))
+        list.addRectFilled(x, y, x + size, y + size, EditorTheme.CONTROL.u32, EditorFonts.px(8f))
         Icons.draw(list, icon, x + size * 0.22f, y + size * 0.22f, size * 0.56f, iconColor)
         ImGui.dummy(size, size)
         ImGui.sameLine(0f, EditorFonts.px(10f))
         ImGui.beginGroup()
-        EditorFonts.with(EditorFonts.heading) { ImGui.textUnformatted(text) }
-        if (subtitle != null) Widgets.smallText(subtitle, EditorTheme.TEXT_MUTED.u32)
+        EditorFonts.with(EditorFonts.heading) {
+            ImGui.textUnformatted(Widgets.clip(text, ImGui.getContentRegionAvailX()))
+        }
+        if (chips.isNotEmpty()) Widgets.chips(chips, lineHeight = EditorFonts.px(18f))
         ImGui.endGroup()
-        ImGui.dummy(0f, EditorFonts.px(6f))
+        ImGui.dummy(0f, EditorFonts.px(4f))
+    }
+
+    private fun section(title: String, key: String, defaultOpen: Boolean = true, trailing: String? = null): Boolean =
+        Widgets.foldout(title, key, context.ui.collapsedSections, defaultOpen, trailing)
+
+    private fun iconActions(actions: List<IconAction>, sameLine: Boolean) {
+        if (actions.isEmpty()) return
+        val size = ImGui.getFrameHeight()
+        val gap = EditorFonts.px(4f)
+        val total = actions.size * size + gap * (actions.size - 1)
+        if (sameLine) {
+            ImGui.sameLine(0f, EditorFonts.px(8f))
+            if (ImGui.getContentRegionAvailX() < total) ImGui.newLine()
+        }
+        Widgets.rightAlign(total, spacing = 0f)
+        for ((index, action) in actions.withIndex()) {
+            if (index > 0) ImGui.sameLine(0f, gap)
+            if (Widgets.iconButton(action.id, action.icon, size, action.tooltip, enabled = action.enabled, color = action.color, iconScale = 0.55f)) action.run()
+        }
     }
 
     private fun keyframe(session: EditorSession, time: Long) {
@@ -78,139 +100,112 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             return
         }
         val replay = session.replay
+        val camera = session.project.camera
         val atPlayhead = replay != null && abs(replay.positionNanos - time) < Nanos.PER_MILLI * 5
-        title(
+        header(
             Icon.KEYFRAME,
             "Keyframe",
-            "${TimeFormat.clock(time)}${if (atPlayhead) "    at playhead" else ""}",
+            listOfNotNull(TimeFormat.clock(time), frame.mode.label, "at playhead".takeIf { atPlayhead }),
             EditorTheme.modeColor(frame.mode).u32
         )
-
+        val previous = camera.previousKeyframeTime(time)
+        val next = camera.nextKeyframeTime(time)
         if (Widgets.accentButton("Update from view")) session.execute(
-            SetCameraKeyframe(
-                time,
-                context.host.camera.currentPose(),
-                frame.easing,
-                frame.mode
-            )
+            SetCameraKeyframe(time, context.host.camera.currentPose(), frame.easing, frame.mode)
         )
         Widgets.tooltip("Replace this keyframe with the current camera")
-        ImGui.sameLine()
-        if (Widgets.iconButton(
-                "kf-goto",
-                Icon.TARGET,
-                ImGui.getFrameHeight(),
-                "Go to this keyframe"
-            )
-        ) replay?.seek(time)
-        ImGui.sameLine()
-        if (Widgets.iconButton("kf-look", Icon.EYE, ImGui.getFrameHeight(), "Look through this keyframe")) lookThrough(
-            frame.pose
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("kf-prev", Icon.CHEVRON_LEFT, "Previous keyframe  ,", enabled = previous != null) {
+                    previous?.let { select(session, it) }
+                },
+                IconAction("kf-next", Icon.CHEVRON_RIGHT, "Next keyframe  .", enabled = next != null) {
+                    next?.let { select(session, it) }
+                },
+                IconAction("kf-goto", Icon.TARGET, "Go to this keyframe", enabled = replay != null) { replay?.seek(time) },
+                IconAction("kf-look", Icon.EYE, "Look through this keyframe") { lookThrough(frame.pose) },
+                IconAction("kf-frame", Icon.FIT, "Frame it in the scene  F") {
+                    context.host.camera.frame(frame.pose.position.x, frame.pose.position.y, frame.pose.position.z, 1.5)
+                },
+                IconAction("kf-delete", Icon.TRASH, "Delete keyframe", EditorTheme.RECORD.u32) {
+                    session.execute(RemoveKeyframes(setOf(time)))
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = true
         )
-        ImGui.sameLine()
-        if (Widgets.iconButton(
-                "kf-frame",
-                Icon.FIT,
-                ImGui.getFrameHeight(),
-                "Frame it in the scene  F"
-            )
-        ) context.host.camera.frame(frame.pose.position.x, frame.pose.position.y, frame.pose.position.z, 1.5)
-        ImGui.sameLine()
-        if (Widgets.iconButton(
-                "kf-delete",
-                Icon.TRASH,
-                ImGui.getFrameHeight(),
-                "Delete keyframe",
-                color = EditorTheme.RECORD.u32
-            )
-        ) {
-            session.execute(RemoveKeyframes(setOf(time)))
-            session.selection = Selection.NONE
-            return
-        }
+        if (deleted) return
 
-        Widgets.header("Timing")
-        if (Widgets.beginProperties("timing")) {
-            Widgets.property("Time")
-            Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
-                TimeFormat.parseClock(text)?.let { target ->
-                    if (target != time && session.project.camera.keyframeAt(target) == null) {
-                        session.execute(MoveCameraKeyframe(time, target))
-                        session.selection = Selection(keyframeTimes = setOf(target))
+        if (section("Timing", "keyframe.timing")) {
+            if (Widgets.beginProperties("timing")) {
+                Widgets.property("Time")
+                Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
+                    TimeFormat.parseClock(text)?.let { target ->
+                        if (target != time && camera.keyframeAt(target) == null) {
+                            session.execute(MoveCameraKeyframe(time, target))
+                            session.selection = Selection(keyframeTimes = setOf(target))
+                        }
                     }
                 }
+                Widgets.property("Nudge")
+                nudgeRow(session, setOf(time))
+                Widgets.property("Interpolation", "How the camera moves from this keyframe to the next one")
+                val modes = SegmentMode.entries
+                Widgets.segmented("mode", modes.map { it.label }, modes.indexOf(frame.mode), 0f, MODE_TOOLTIPS)
+                    ?.let { session.execute(SetKeyframeMode(setOf(time), modes[it])) }
+                Widgets.endProperties()
             }
-            Widgets.property("Nudge")
-            nudgeRow(session, setOf(time))
-            Widgets.property("Interpolation", "How the camera moves from this keyframe to the next one")
-            val modes = SegmentMode.entries
-            Widgets.segmented("mode", modes.map { it.label }, modes.indexOf(frame.mode), 0f, MODE_TOOLTIPS)
-                ?.let { session.execute(SetKeyframeMode(setOf(time), modes[it])) }
-            Widgets.endProperties()
         }
+        if (section("Transform", "keyframe.transform")) {
+            if (Widgets.beginProperties("transform")) {
+                val pose = frame.pose
+                Widgets.property("Position")
+                Widgets.vector3("##pos", pose.position.x, pose.position.y, pose.position.z, 0.05f)?.let {
+                    session.execute(
+                        SetCameraKeyframe(
+                            time,
+                            CameraPose(Vector3d(it[0], it[1], it[2]), pose.rotation, pose.fov),
+                            frame.easing,
+                            frame.mode
+                        )
+                    )
+                }
+                Widgets.property("Rotation")
+                Widgets.vector3("##rot", pose.rotation.yaw, pose.rotation.pitch, pose.rotation.roll, 0.5f, "%.1f°")?.let {
+                    session.execute(
+                        SetCameraKeyframe(
+                            time,
+                            CameraPose(pose.position, Rotation(it[0], it[1].coerceIn(-90.0, 90.0), it[2]), pose.fov),
+                            frame.easing,
+                            frame.mode
+                        )
+                    )
+                }
+                Widgets.property("Field of view")
+                Widgets.doubleSlider("##fov", pose.fov, 10.0, 150.0, "%.0f°")?.let {
+                    session.execute(
+                        SetCameraKeyframe(time, CameraPose(pose.position, pose.rotation, it), frame.easing, frame.mode)
+                    )
+                }
+                Widgets.endProperties()
+            }
+        }
+        if (frame.mode == SegmentMode.BEZIER) bezierHandles(session, time)
         easingSection(
             session,
-            "Easing to next keyframe",
+            "keyframe.easing",
             frame.easing,
-            next = session.project.camera.nextKeyframeTime(time) != null,
+            next = next != null,
             times = setOf(time),
             keys = emptySet()
         ) { session.execute(SetKeyframeEasing(setOf(time), it)) }
+    }
 
-        Widgets.header("Transform")
-        if (Widgets.beginProperties("transform")) {
-            val pose = frame.pose
-            Widgets.property("Position")
-            Widgets.vector3("##pos", pose.position.x, pose.position.y, pose.position.z, 0.05f)?.let {
-                session.execute(
-                    SetCameraKeyframe(
-                        time,
-                        CameraPose(Vector3d(it[0], it[1], it[2]), pose.rotation, pose.fov),
-                        frame.easing,
-                        frame.mode
-                    )
-                )
-            }
-            Widgets.property("Rotation")
-            Widgets.vector3("##rot", pose.rotation.yaw, pose.rotation.pitch, pose.rotation.roll, 0.5f, "%.1f°")?.let {
-                session.execute(
-                    SetCameraKeyframe(
-                        time,
-                        CameraPose(pose.position, Rotation(it[0], it[1].coerceIn(-90.0, 90.0), it[2]), pose.fov),
-                        frame.easing,
-                        frame.mode
-                    )
-                )
-            }
-            Widgets.property("Field of view")
-            Widgets.doubleSlider("##fov", pose.fov, 10.0, 150.0, "%.0f°")?.let {
-                session.execute(
-                    SetCameraKeyframe(
-                        time,
-                        CameraPose(pose.position, pose.rotation, it),
-                        frame.easing,
-                        frame.mode
-                    )
-                )
-            }
-            Widgets.endProperties()
-        }
-        if (frame.mode == SegmentMode.BEZIER) bezierHandles(session, time)
-
-        val previous = session.project.camera.previousKeyframeTime(time)
-        val next = session.project.camera.nextKeyframeTime(time)
-        Widgets.smallText(
-            "${previous?.let { "Previous ${TimeFormat.short(it)}" } ?: "First keyframe"}    ${
-                next?.let {
-                    "Next ${
-                        TimeFormat.short(
-                            it
-                        )
-                    }"
-                } ?: "Last keyframe"
-            }",
-            EditorTheme.TEXT_DIM.u32,
-        )
+    private fun select(session: EditorSession, time: Long) {
+        session.selection = Selection(keyframeTimes = setOf(time))
+        session.replay?.seek(time)
     }
 
     private fun nudgeRow(session: EditorSession, times: Set<Long>) {
@@ -236,10 +231,10 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
 
     private fun bezierHandles(session: EditorSession, time: Long) {
         val keyframe = session.project.camera.position.at(time) ?: return
-        Widgets.header("Bezier handles")
+        val handleIn = keyframe.handleIn
+        val handleOut = keyframe.handleOut
+        if (!section("Bezier handles", "keyframe.bezier", trailing = if (handleIn != null) "Custom" else "Automatic")) return
         if (Widgets.beginProperties("bezier")) {
-            val handleIn = keyframe.handleIn
-            val handleOut = keyframe.handleOut
             Widgets.property("Custom handles", "Drag the purple handles in the scene once enabled")
             Widgets.toggle("##custom", handleIn != null || handleOut != null)?.let { enabled ->
                 if (enabled) {
@@ -271,41 +266,53 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
 
     private fun keyframes(session: EditorSession, times: Set<Long>) {
         val sorted = times.sorted()
-        title(
+        header(
             Icon.KEYFRAME,
             "${times.size} keyframes",
-            "${TimeFormat.clock(sorted.first())} to ${TimeFormat.clock(sorted.last())}"
+            listOf(
+                "${TimeFormat.short(sorted.first())} to ${TimeFormat.short(sorted.last())}",
+                TimeFormat.short(sorted.last() - sorted.first())
+            )
         )
         val first = session.project.camera.keyframeAt(sorted.first())
-        if (Widgets.beginProperties("multi")) {
-            Widgets.property("Interpolation")
-            val modes = SegmentMode.entries
-            val shared = sorted.mapNotNull { session.project.camera.keyframeAt(it)?.mode }.distinct().singleOrNull()
-            Widgets.segmented(
-                "mode",
-                modes.map { it.label },
-                shared?.let { modes.indexOf(it) } ?: -1,
-                0f,
-                MODE_TOOLTIPS)?.let { session.execute(SetKeyframeMode(times, modes[it])) }
-            Widgets.property("Nudge all")
-            nudgeRow(session, times)
-            Widgets.endProperties()
+        if (Widgets.ghostButton("Select all keyframes")) session.selection =
+            Selection(keyframeTimes = session.project.camera.keyframeTimes().toSet())
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("kfs-goto", Icon.TARGET, "Go to the first selected keyframe", enabled = session.replay != null) {
+                    session.replay?.seek(sorted.first())
+                },
+                IconAction("kfs-delete", Icon.TRASH, "Delete ${times.size} keyframes", EditorTheme.RECORD.u32) {
+                    session.execute(RemoveKeyframes(times))
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = true
+        )
+        if (deleted) return
+        if (section("Keyframes", "keyframes.timing")) {
+            if (Widgets.beginProperties("multi")) {
+                Widgets.property("Interpolation")
+                val modes = SegmentMode.entries
+                val shared = sorted.mapNotNull { session.project.camera.keyframeAt(it)?.mode }.distinct().singleOrNull()
+                Widgets.segmented("mode", modes.map { it.label }, shared?.let { modes.indexOf(it) } ?: -1, 0f, MODE_TOOLTIPS)
+                    ?.let { session.execute(SetKeyframeMode(times, modes[it])) }
+                Widgets.property("Nudge all")
+                nudgeRow(session, times)
+                Widgets.endProperties()
+            }
         }
         easingSection(
             session,
-            "Easing",
+            "keyframes.easing",
             first?.easing ?: Easing.LINEAR,
             next = true,
             times = times,
             keys = emptySet()
-        ) {
-            session.execute(SetKeyframeEasing(times, it))
-        }
+        ) { session.execute(SetKeyframeEasing(times, it)) }
         stretchSection(session, times, emptySet())
-        if (Widgets.dangerButton("Delete ${times.size} keyframes")) {
-            session.execute(RemoveKeyframes(times))
-            session.selection = Selection.NONE
-        }
     }
 
     private fun nudge(session: EditorSession, times: Set<Long>, delta: Long) {
@@ -320,62 +327,76 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             session.selection = Selection.NONE
             return
         }
-        title(
-            HierarchyPanel.LANE_ICONS[lane.kind] ?: Icon.SLIDERS,
+        header(
+            laneIcon(lane.kind),
             "${lane.label} keyframe",
-            TimeFormat.clock(key.nanos)
+            listOf(TimeFormat.clock(key.nanos), lane.format(frame.value))
         )
-        if (Widgets.beginProperties("value")) {
-            Widgets.property("Time")
-            Widgets.textInput("##time", TimeFormat.clock(key.nanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
-                ?.let { text ->
-                    TimeFormat.parseClock(text)?.let { target ->
-                        if (target != key.nanos) {
-                            session.execute(MoveValueKeyframe(lane, key.nanos, target))
-                            session.selection = Selection(valueKeys = setOf(ValueKey(lane, target)))
+        if (Widgets.ghostButton("Open in Graph Editor")) context.openPanel("Graph Editor")
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("vk-goto", Icon.TARGET, "Go to this keyframe", enabled = session.replay != null) {
+                    session.replay?.seek(key.nanos)
+                },
+                IconAction("vk-delete", Icon.TRASH, "Delete keyframe", EditorTheme.RECORD.u32) {
+                    session.execute(RemoveValueKeyframes(setOf(key)))
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = true
+        )
+        if (deleted) return
+        if (section("Value", "value.value")) {
+            if (Widgets.beginProperties("value")) {
+                Widgets.property("Time")
+                Widgets.textInput("##time", TimeFormat.clock(key.nanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
+                    ?.let { text ->
+                        TimeFormat.parseClock(text)?.let { target ->
+                            if (target != key.nanos) {
+                                session.execute(MoveValueKeyframe(lane, key.nanos, target))
+                                session.selection = Selection(valueKeys = setOf(ValueKey(lane, target)))
+                            }
+                        }
+                    }
+                Widgets.property(lane.label)
+                Widgets.slider(
+                    "##value",
+                    frame.value.toFloat(),
+                    lane.min.toFloat(),
+                    lane.max.toFloat(),
+                    lane.format,
+                    labelOf = { lane.format(it.toDouble()) })
+                    ?.let { session.execute(SetValueKeyframe(lane, key.nanos, it.toDouble(), frame.mode, frame.easing)) }
+                val presets = VALUE_PRESETS[lane]
+                if (presets != null) {
+                    Widgets.property("Presets")
+                    for ((index, preset) in presets.withIndex()) {
+                        if (index > 0) ImGui.sameLine(0f, EditorFonts.px(4f))
+                        if (Widgets.chipButton("preset-$index", lane.format(preset), abs(preset - frame.value) < 1e-6)) {
+                            session.execute(SetValueKeyframe(lane, key.nanos, preset, frame.mode, frame.easing))
                         }
                     }
                 }
-            Widgets.property(lane.label)
-            Widgets.slider(
-                "##value",
-                frame.value.toFloat(),
-                lane.min.toFloat(),
-                lane.max.toFloat(),
-                lane.format,
-                labelOf = { lane.format(it.toDouble()) })
-                ?.let { session.execute(SetValueKeyframe(lane, key.nanos, it.toDouble(), frame.mode, frame.easing)) }
-            val presets = VALUE_PRESETS[lane]
-            if (presets != null) {
-                Widgets.property("")
-                Widgets.segmented(
-                    "presets",
-                    presets.map { lane.format(it) },
-                    presets.indexOfFirst { abs(it - frame.value) < 1e-6 },
-                    0f
-                )?.let { session.execute(SetValueKeyframe(lane, key.nanos, presets[it], frame.mode, frame.easing)) }
+                Widgets.property(
+                    "Ramp",
+                    "Linear ramps evenly, Smooth eases through neighbours, Hold keeps the value until the next keyframe"
+                )
+                val options = listOf(SegmentMode.LINEAR, SegmentMode.CATMULL_ROM, SegmentMode.HOLD)
+                Widgets.segmented("ramp", options.map { it.label }, options.indexOf(frame.mode).coerceAtLeast(0), 0f)
+                    ?.let { session.execute(SetValueKeyframe(lane, key.nanos, frame.value, options[it], frame.easing)) }
+                Widgets.endProperties()
             }
-            Widgets.property(
-                "Ramp",
-                "Linear ramps evenly, Smooth eases through neighbours, Hold keeps the value until the next keyframe"
-            )
-            val options = listOf(SegmentMode.LINEAR, SegmentMode.CATMULL_ROM, SegmentMode.HOLD)
-            Widgets.segmented("ramp", options.map { it.label }, options.indexOf(frame.mode).coerceAtLeast(0), 0f)
-                ?.let { session.execute(SetValueKeyframe(lane, key.nanos, frame.value, options[it], frame.easing)) }
-            Widgets.endProperties()
         }
         easingSection(
             session,
-            "Easing to next keyframe",
+            "value.easing",
             frame.easing,
             next = session.project.valueTrack(lane).next(key.nanos) != null,
             times = emptySet(),
             keys = setOf(key)
         ) { session.execute(SetValueKeyframeEasing(setOf(key), it)) }
-        if (Widgets.dangerButton("Delete")) {
-            session.execute(RemoveValueKeyframes(setOf(key)))
-            session.selection = Selection.NONE
-        }
     }
 
     private fun packKeyframe(session: EditorSession, time: Long) {
@@ -385,34 +406,54 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             return
         }
         val state = frame.value
-        title(Icon.PACKAGE, "Texture pack switch", TimeFormat.clock(time))
-        if (Widgets.beginProperties("pack")) {
-            Widgets.property("Time")
-            Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
-                TimeFormat.parseClock(text)?.let { target ->
-                    if (target != time) {
-                        session.execute(MovePackKeyframe(time, target))
-                        session.selection = Selection(packTimes = setOf(target))
+        header(
+            Icon.PACKAGE,
+            "Texture pack switch",
+            listOf(TimeFormat.clock(time), if (state.isDefault) "Default textures" else "${state.packs.size} packs")
+        )
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("pk-goto", Icon.TARGET, "Go to this keyframe", enabled = session.replay != null) {
+                    session.replay?.seek(time)
+                },
+                IconAction("pk-delete", Icon.TRASH, "Delete keyframe", EditorTheme.RECORD.u32) {
+                    session.execute(RemovePackKeyframes(setOf(time)))
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = false
+        )
+        if (deleted) return
+        if (section("Packs", "pack.packs")) {
+            if (Widgets.beginProperties("pack")) {
+                Widgets.property("Time")
+                Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
+                    TimeFormat.parseClock(text)?.let { target ->
+                        if (target != time) {
+                            session.execute(MovePackKeyframe(time, target))
+                            session.selection = Selection(packTimes = setOf(target))
+                        }
                     }
                 }
+                Widgets.property("Default textures", "No resource packs from here on")
+                Widgets.toggle("##default", state.isDefault)?.let { if (it) session.execute(SetPackKeyframe(time, PackState.DEFAULT)) }
+                val available = context.host.resourcePacks()
+                for (pack in available) {
+                    Widgets.property(pack.removeSuffix(".zip"))
+                    Widgets.toggle("##pack-$pack", pack in state.packs)?.let { session.execute(SetPackKeyframe(time, state.toggled(pack))) }
+                }
+                if (available.isEmpty()) {
+                    Widgets.property("Packs")
+                    Widgets.mutedText("None in the resourcepacks folder")
+                }
+                Widgets.endProperties()
             }
-            Widgets.property("Default textures", "No resource packs from here on")
-            Widgets.toggle("##default", state.isDefault)?.let { if (it) session.execute(SetPackKeyframe(time, PackState.DEFAULT)) }
-            val available = context.host.resourcePacks()
-            for (pack in available) {
-                Widgets.property(pack.removeSuffix(".zip"))
-                Widgets.toggle("##pack-$pack", pack in state.packs)?.let { session.execute(SetPackKeyframe(time, state.toggled(pack))) }
-            }
-            if (available.isEmpty()) {
-                Widgets.property("Packs")
-                Widgets.mutedText("None in the resourcepacks folder")
-            }
-            Widgets.endProperties()
-        }
-        Widgets.wrappedText("Packs lower in the list override the ones above, like the resource pack screen. Switching reloads textures, which takes a moment.", EditorTheme.TEXT_DIM.u32)
-        if (Widgets.dangerButton("Delete keyframe")) {
-            session.execute(RemovePackKeyframes(setOf(time)))
-            session.selection = Selection.NONE
+            Widgets.wrappedText(
+                "Packs lower in the list override the ones above, like the resource pack screen. Switching reloads textures, which takes a moment.",
+                EditorTheme.TEXT_DIM.u32
+            )
         }
     }
 
@@ -424,96 +465,107 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         }
         val view = frame.value
         fun set(next: ViewState) = session.execute(SetViewKeyframe(time, next, frame.mode, frame.easing))
-        title(Icon.EYE, "View switch", "${TimeFormat.clock(time)}    ${view.mode.label}")
-        if (Widgets.beginProperties("view")) {
-            Widgets.property("Time")
-            Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
-                TimeFormat.parseClock(text)?.let { target ->
-                    if (target != time) {
-                        session.execute(MoveViewKeyframe(time, target))
-                        session.selection = Selection(viewTimes = setOf(target))
-                    }
-                }
-            }
-            Widgets.property("Mode")
-            val modes = CameraMode.entries
-            Widgets.segmented("mode", modes.map { it.label }, modes.indexOf(view.mode), 0f)
-                ?.let { set(view.copy(mode = modes[it])) }
-            Widgets.property("Target")
-            Widgets.mutedText(
-                if (view.targetEntityId == CameraSettings.TARGET_RECORDER) "Recorder" else entityLabel(
-                    view.targetEntityId
-                )
-            )
-            if (view.mode == CameraMode.ORBIT) {
-                Widgets.property("Distance")
-                Widgets.doubleSlider("##odist", view.orbitDistance, 0.5, 40.0, "%.1f")
-                    ?.let { set(view.copy(orbitDistance = it)) }
-                Widgets.property("Pitch")
-                Widgets.doubleSlider("##opitch", view.orbitPitch, -89.0, 89.0, "%.0f°")
-                    ?.let { set(view.copy(orbitPitch = it)) }
-                Widgets.property("Yaw offset")
-                Widgets.doubleSlider("##oyaw", view.orbitYawOffset, -180.0, 180.0, "%.0f°")
-                    ?.let { set(view.copy(orbitYawOffset = it)) }
-                Widgets.property("Height")
-                Widgets.doubleSlider("##oheight", view.orbitHeight, -5.0, 10.0, "%.1f")
-                    ?.let { set(view.copy(orbitHeight = it)) }
-                Widgets.property("Spin (deg/s)")
-                Widgets.doubleSlider("##ospin", view.orbitDegreesPerSecond, -90.0, 90.0, "%.1f")
-                    ?.let { set(view.copy(orbitDegreesPerSecond = it)) }
-            }
-            if (view.mode == CameraMode.FOLLOW) {
-                Widgets.property("Offset X")
-                Widgets.doubleSlider("##fx", view.followOffsetX, -20.0, 20.0, "%.1f")
-                    ?.let { set(view.copy(followOffsetX = it)) }
-                Widgets.property("Offset Y")
-                Widgets.doubleSlider("##fy", view.followOffsetY, -20.0, 20.0, "%.1f")
-                    ?.let { set(view.copy(followOffsetY = it)) }
-                Widgets.property("Offset Z")
-                Widgets.doubleSlider("##fz", view.followOffsetZ, -20.0, 20.0, "%.1f")
-                    ?.let { set(view.copy(followOffsetZ = it)) }
-                Widgets.property("Look at target")
-                Widgets.toggle("##flook", view.followLookAtTarget)?.let { set(view.copy(followLookAtTarget = it)) }
-            }
-            if (view.mode == CameraMode.CHASE) {
-                Widgets.property("Distance")
-                Widgets.doubleSlider("##cdist", view.chaseDistance, 0.5, 40.0, "%.1f")
-                    ?.let { set(view.copy(chaseDistance = it)) }
-                Widgets.property("Height")
-                Widgets.doubleSlider("##cheight", view.chaseHeight, -5.0, 10.0, "%.1f")
-                    ?.let { set(view.copy(chaseHeight = it)) }
-                Widgets.property("Stiffness")
-                Widgets.doubleSlider("##cstiff", view.chaseStiffness, 1.0, 100.0, "%.0f")
-                    ?.let { set(view.copy(chaseStiffness = it)) }
-                Widgets.property("Damping")
-                Widgets.doubleSlider("##cdamp", view.chaseDamping, 0.5, 40.0, "%.1f")
-                    ?.let { set(view.copy(chaseDamping = it)) }
-            }
-            if (view.mode == CameraMode.ORBIT || view.mode == CameraMode.FOLLOW || view.mode == CameraMode.CHASE) {
-                Widgets.property("Track point")
-                val bodyParts = TrackingBodyPart.entries
-                Widgets.segmented("bodypart", bodyParts.map { it.label }, bodyParts.indexOf(view.bodyPart), 0f)
-                    ?.let { set(view.copy(bodyPart = bodyParts[it])) }
-                Widgets.property("Target offset")
-                Widgets.doubleSlider("##tox", view.targetOffsetX, -10.0, 10.0, "X %.1f")
-                    ?.let { set(view.copy(targetOffsetX = it)) }
-                Widgets.doubleSlider("##toy", view.targetOffsetY, -10.0, 10.0, "Y %.1f")
-                    ?.let { set(view.copy(targetOffsetY = it)) }
-                Widgets.doubleSlider("##toz", view.targetOffsetZ, -10.0, 10.0, "Z %.1f")
-                    ?.let { set(view.copy(targetOffsetZ = it)) }
-            }
-            Widgets.endProperties()
-        }
+        val target = if (view.targetEntityId == CameraSettings.TARGET_RECORDER) "Recorder" else entityLabel(view.targetEntityId)
+        header(Icon.EYE, "View switch", listOf(TimeFormat.clock(time), view.mode.label, target))
         if (Widgets.accentButton("Update from camera")) set(ViewState.capture(context.host.camera.settings))
+        Widgets.tooltip("Store the current camera mode and target in this keyframe")
         ImGui.sameLine()
         if (Widgets.ghostButton("Apply now")) {
             view.applyTo(context.host.camera.settings)
             context.host.camera.apply()
         }
-        ImGui.sameLine()
-        if (Widgets.dangerButton("Delete")) {
-            session.execute(RemoveViewKeyframes(setOf(time)))
-            session.selection = Selection.NONE
+        Widgets.tooltip("Switch the camera to this view right away")
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("vw-goto", Icon.TARGET, "Go to this keyframe", enabled = session.replay != null) {
+                    session.replay?.seek(time)
+                },
+                IconAction("vw-delete", Icon.TRASH, "Delete keyframe", EditorTheme.RECORD.u32) {
+                    session.execute(RemoveViewKeyframes(setOf(time)))
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = true
+        )
+        if (deleted) return
+        if (section("View", "view.view")) {
+            if (Widgets.beginProperties("view")) {
+                Widgets.property("Time")
+                Widgets.textInput("##time", TimeFormat.clock(time), 32, ImGuiInputTextFlags.EnterReturnsTrue)?.let { text ->
+                    TimeFormat.parseClock(text)?.let { moved ->
+                        if (moved != time) {
+                            session.execute(MoveViewKeyframe(time, moved))
+                            session.selection = Selection(viewTimes = setOf(moved))
+                        }
+                    }
+                }
+                Widgets.property("Mode")
+                val modes = CameraMode.entries
+                Widgets.segmented("mode", modes.map { it.label }, modes.indexOf(view.mode), 0f)
+                    ?.let { set(view.copy(mode = modes[it])) }
+                Widgets.property("Target")
+                Widgets.mutedText(target)
+                Widgets.endProperties()
+            }
+        }
+        val tracks = view.mode == CameraMode.ORBIT || view.mode == CameraMode.FOLLOW || view.mode == CameraMode.CHASE
+        if (view.mode == CameraMode.ORBIT && section("Orbit", "view.orbit")) {
+            if (Widgets.beginProperties("orbit")) {
+                Widgets.property("Distance")
+                Widgets.doubleSlider("##odist", view.orbitDistance, 0.5, 40.0, "%.1f")?.let { set(view.copy(orbitDistance = it)) }
+                Widgets.property("Pitch")
+                Widgets.doubleSlider("##opitch", view.orbitPitch, -89.0, 89.0, "%.0f°")?.let { set(view.copy(orbitPitch = it)) }
+                Widgets.property("Yaw offset")
+                Widgets.doubleSlider("##oyaw", view.orbitYawOffset, -180.0, 180.0, "%.0f°")?.let { set(view.copy(orbitYawOffset = it)) }
+                Widgets.property("Height")
+                Widgets.doubleSlider("##oheight", view.orbitHeight, -5.0, 10.0, "%.1f")?.let { set(view.copy(orbitHeight = it)) }
+                Widgets.property("Spin", "Degrees per second")
+                Widgets.doubleSlider("##ospin", view.orbitDegreesPerSecond, -90.0, 90.0, "%.1f°/s")?.let { set(view.copy(orbitDegreesPerSecond = it)) }
+                Widgets.endProperties()
+            }
+        }
+        if (view.mode == CameraMode.FOLLOW && section("Follow", "view.follow")) {
+            if (Widgets.beginProperties("follow")) {
+                Widgets.property("Offset X")
+                Widgets.doubleSlider("##fx", view.followOffsetX, -20.0, 20.0, "%.1f")?.let { set(view.copy(followOffsetX = it)) }
+                Widgets.property("Offset Y")
+                Widgets.doubleSlider("##fy", view.followOffsetY, -20.0, 20.0, "%.1f")?.let { set(view.copy(followOffsetY = it)) }
+                Widgets.property("Offset Z")
+                Widgets.doubleSlider("##fz", view.followOffsetZ, -20.0, 20.0, "%.1f")?.let { set(view.copy(followOffsetZ = it)) }
+                Widgets.property("Look at target")
+                Widgets.toggle("##flook", view.followLookAtTarget)?.let { set(view.copy(followLookAtTarget = it)) }
+                Widgets.endProperties()
+            }
+        }
+        if (view.mode == CameraMode.CHASE && section("Chase", "view.chase")) {
+            if (Widgets.beginProperties("chase")) {
+                Widgets.property("Distance")
+                Widgets.doubleSlider("##cdist", view.chaseDistance, 0.5, 40.0, "%.1f")?.let { set(view.copy(chaseDistance = it)) }
+                Widgets.property("Height")
+                Widgets.doubleSlider("##cheight", view.chaseHeight, -5.0, 10.0, "%.1f")?.let { set(view.copy(chaseHeight = it)) }
+                Widgets.property("Stiffness")
+                Widgets.doubleSlider("##cstiff", view.chaseStiffness, 1.0, 100.0, "%.0f")?.let { set(view.copy(chaseStiffness = it)) }
+                Widgets.property("Damping")
+                Widgets.doubleSlider("##cdamp", view.chaseDamping, 0.5, 40.0, "%.1f")?.let { set(view.copy(chaseDamping = it)) }
+                Widgets.endProperties()
+            }
+        }
+        if (tracks && section("Tracking", "view.tracking")) {
+            if (Widgets.beginProperties("tracking")) {
+                Widgets.property("Track point")
+                val bodyParts = TrackingBodyPart.entries
+                Widgets.segmented("bodypart", bodyParts.map { it.label }, bodyParts.indexOf(view.bodyPart), 0f)
+                    ?.let { set(view.copy(bodyPart = bodyParts[it])) }
+                Widgets.property("Offset X")
+                Widgets.doubleSlider("##tox", view.targetOffsetX, -10.0, 10.0, "%.1f")?.let { set(view.copy(targetOffsetX = it)) }
+                Widgets.property("Offset Y")
+                Widgets.doubleSlider("##toy", view.targetOffsetY, -10.0, 10.0, "%.1f")?.let { set(view.copy(targetOffsetY = it)) }
+                Widgets.property("Offset Z")
+                Widgets.doubleSlider("##toz", view.targetOffsetZ, -10.0, 10.0, "%.1f")?.let { set(view.copy(targetOffsetZ = it)) }
+                Widgets.endProperties()
+            }
         }
     }
 
@@ -524,10 +576,14 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             return
         }
         val replay = session.replay
-        title(
+        header(
             Icon.FILM,
             clip.title,
-            "${TimeFormat.clock(clip.startNanos)} to ${TimeFormat.clock(clip.endNanos)}    ${TimeFormat.short(clip.durationNanos)}"
+            listOf(
+                "${TimeFormat.short(clip.startNanos)} to ${TimeFormat.short(clip.endNanos)}",
+                TimeFormat.short(clip.durationNanos),
+                clip.origin.name.lowercase()
+            )
         )
         if (Widgets.accentButton("Play")) ClipActions.play(session, clip)
         ImGui.sameLine()
@@ -535,65 +591,64 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         Widgets.tooltip("Write a standalone .afterimage file with only this clip")
         ImGui.sameLine()
         if (Widgets.ghostButton("Export")) ClipActions.export(context, clip)
-        ImGui.sameLine()
-        if (Widgets.iconButton(
-                "clip-delete",
-                Icon.TRASH,
-                ImGui.getFrameHeight(),
-                "Delete clip",
-                color = EditorTheme.RECORD.u32
-            )
-        ) {
-            session.execute(RemoveClip(clip.id))
-            context.clips.delete(clip.id)
-            session.selection = Selection.NONE
-            return
-        }
-        Widgets.header("Details")
-        if (Widgets.beginProperties("clip")) {
-            Widgets.property("Title")
-            Widgets.textInput("##title", clip.title, 64)?.let { replace(session, clip, clip.copy(title = it)) }
-            Widgets.property("In")
-            Widgets.textInput("##in", TimeFormat.clock(clip.startNanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
-                ?.let { text ->
-                    TimeFormat.parseClock(text)
-                        ?.let { if (it < clip.endNanos) replace(session, clip, clip.trimmed(it, clip.endNanos)) }
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("clip-goto", Icon.TARGET, "Go to the clip start", enabled = replay != null) { replay?.seek(clip.startNanos) },
+                IconAction("clip-delete", Icon.TRASH, "Delete clip", EditorTheme.RECORD.u32) {
+                    session.execute(RemoveClip(clip.id))
+                    context.clips.delete(clip.id)
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = true
+        )
+        if (deleted) return
+        if (section("Details", "clip.details")) {
+            if (Widgets.beginProperties("clip")) {
+                Widgets.property("Title")
+                Widgets.textInput("##title", clip.title, 64)?.let { replace(session, clip, clip.copy(title = it)) }
+                Widgets.property("In")
+                Widgets.textInput("##in", TimeFormat.clock(clip.startNanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
+                    ?.let { text ->
+                        TimeFormat.parseClock(text)
+                            ?.let { if (it < clip.endNanos) replace(session, clip, clip.trimmed(it, clip.endNanos)) }
+                    }
+                Widgets.property("Out")
+                Widgets.textInput("##out", TimeFormat.clock(clip.endNanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
+                    ?.let { text ->
+                        TimeFormat.parseClock(text)
+                            ?.let { if (it > clip.startNanos) replace(session, clip, clip.trimmed(clip.startNanos, it)) }
+                    }
+                Widgets.property("Tags")
+                Widgets.textInput("##tags", clip.tags.joinToString(", "), 128)?.let {
+                    replace(
+                        session,
+                        clip,
+                        clip.copy(tags = it.split(',').map { tag -> tag.trim() }.filter { tag -> tag.isNotEmpty() }.toSet())
+                    )
                 }
-            Widgets.property("Out")
-            Widgets.textInput("##out", TimeFormat.clock(clip.endNanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
-                ?.let { text ->
-                    TimeFormat.parseClock(text)
-                        ?.let { if (it > clip.startNanos) replace(session, clip, clip.trimmed(clip.startNanos, it)) }
-                }
-            Widgets.property("Tags")
-            Widgets.textInput("##tags", clip.tags.joinToString(", "), 128)?.let {
-                replace(
-                    session,
-                    clip,
-                    clip.copy(tags = it.split(',').map { tag -> tag.trim() }.filter { tag -> tag.isNotEmpty() }.toSet())
+                Widgets.property("Note")
+                Widgets.textInput("##note", clip.note, 256)?.let { replace(session, clip, clip.copy(note = it)) }
+                Widgets.property("Origin")
+                Widgets.pill(
+                    clip.origin.name.lowercase(),
+                    if (clip.origin == ClipOrigin.FLASHBACK) EditorTheme.WARNING else EditorTheme.TEXT_MUTED
                 )
+                Widgets.endProperties()
             }
-            Widgets.property("Note")
-            Widgets.textInput("##note", clip.note, 256)?.let { replace(session, clip, clip.copy(note = it)) }
-            Widgets.property("Origin")
-            Widgets.pill(
-                clip.origin.name.lowercase(),
-                if (clip.origin == ClipOrigin.FLASHBACK) EditorTheme.WARNING else EditorTheme.TEXT_MUTED
-            )
-            Widgets.endProperties()
         }
-        if (Widgets.ghostButton("Set in/out to clip")) session.execute(SetInOutPoints(clip.startNanos, clip.endNanos))
-        ImGui.sameLine()
-        if (Widgets.ghostButton("Clip from in/out")) {
-            val end = if (session.project.outPointNanos > 0L) session.project.outPointNanos else (replay?.durationNanos
-                ?: clip.endNanos)
-            if (end > session.project.inPointNanos) replace(
-                session,
-                clip,
-                clip.trimmed(session.project.inPointNanos, end)
-            )
+        if (section("Range", "clip.range")) {
+            if (Widgets.ghostButton("Set in/out to clip")) session.execute(SetInOutPoints(clip.startNanos, clip.endNanos))
+            Widgets.tooltip("Move the in and out points to this clip")
+            ImGui.sameLine()
+            if (Widgets.ghostButton("Clip from in/out")) {
+                val end = if (session.project.outPointNanos > 0L) session.project.outPointNanos else (replay?.durationNanos ?: clip.endNanos)
+                if (end > session.project.inPointNanos) replace(session, clip, clip.trimmed(session.project.inPointNanos, end))
+            }
+            Widgets.tooltip("Move this clip's range to the current in and out points")
         }
-        Widgets.tooltip("Move this clip's range to the current in and out points")
     }
 
     private fun replace(session: EditorSession, clip: Clip, replacement: Clip) {
@@ -607,31 +662,40 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             session.selection = Selection.NONE
             return
         }
-        title(Icon.MARKER, marker.label, TimeFormat.clock(marker.nanos), Widgets.rgbToU32(marker.color))
-        if (Widgets.beginProperties("marker")) {
-            Widgets.property("Label")
-            Widgets.textInput("##label", marker.label, 64)
-                ?.let { session.execute(ReplaceMarker(marker.id, marker.copy(label = it))) }
-            Widgets.property("Time")
-            Widgets.textInput("##time", TimeFormat.clock(marker.nanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
-                ?.let { text ->
-                    TimeFormat.parseClock(text)
-                        ?.let { session.execute(ReplaceMarker(marker.id, marker.copy(nanos = it))) }
-                }
-            Widgets.property("Colour")
-            for ((index, color) in EditorWorkspace.MARKER_COLORS.withIndex()) {
-                if (index > 0) ImGui.sameLine()
-                if (Widgets.colorSwatch("color$index", color, selected = marker.color == color)) session.execute(
-                    ReplaceMarker(marker.id, marker.copy(color = color))
-                )
-            }
-            Widgets.endProperties()
-        }
+        header(Icon.MARKER, marker.label, listOf(TimeFormat.clock(marker.nanos), marker.kind.name.lowercase()), Widgets.rgbToU32(marker.color))
         if (Widgets.ghostButton("Go to")) session.replay?.seek(marker.nanos)
-        ImGui.sameLine()
-        if (Widgets.dangerButton("Delete")) {
-            session.execute(RemoveMarker(marker.id))
-            session.selection = Selection.NONE
+        var deleted = false
+        iconActions(
+            listOf(
+                IconAction("marker-delete", Icon.TRASH, "Delete marker", EditorTheme.RECORD.u32) {
+                    session.execute(RemoveMarker(marker.id))
+                    session.selection = Selection.NONE
+                    deleted = true
+                },
+            ),
+            sameLine = true
+        )
+        if (deleted) return
+        if (section("Marker", "marker.details")) {
+            if (Widgets.beginProperties("marker")) {
+                Widgets.property("Label")
+                Widgets.textInput("##label", marker.label, 64)
+                    ?.let { session.execute(ReplaceMarker(marker.id, marker.copy(label = it))) }
+                Widgets.property("Time")
+                Widgets.textInput("##time", TimeFormat.clock(marker.nanos), 32, ImGuiInputTextFlags.EnterReturnsTrue)
+                    ?.let { text ->
+                        TimeFormat.parseClock(text)
+                            ?.let { session.execute(ReplaceMarker(marker.id, marker.copy(nanos = it))) }
+                    }
+                Widgets.property("Colour")
+                for ((index, color) in EditorWorkspace.MARKER_COLORS.withIndex()) {
+                    if (index > 0) ImGui.sameLine()
+                    if (Widgets.colorSwatch("color$index", color, selected = marker.color == color)) session.execute(
+                        ReplaceMarker(marker.id, marker.copy(color = color))
+                    )
+                }
+                Widgets.endProperties()
+            }
         }
     }
 
@@ -652,197 +716,127 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             target.isPlayer -> "Player"
             else -> "Entity #${target.id}"
         }
-        title(if (target.isRecorder) Icon.USER else if (target.isPlayer) Icon.PERSON else Icon.CUBE, target.name, kind)
+        val hidden = !target.isRecorder && context.visuals.isHidden(target.id)
+        header(
+            if (target.isRecorder) Icon.USER else if (target.isPlayer) Icon.PERSON else Icon.CUBE,
+            target.name,
+            listOfNotNull(kind, "hidden".takeIf { hidden })
+        )
         val settings = context.host.camera.settings
         val targeted = EntityActions.isTargeted(settings, ref)
-        Widgets.header("Camera")
-        val modes = listOf(CameraMode.FIRST_PERSON, CameraMode.ORBIT, CameraMode.FOLLOW, CameraMode.CHASE)
-        Widgets.segmented("entity-mode", modes.map { it.label }, if (targeted) modes.indexOf(settings.mode) else -1, 0f)
-            ?.let { EntityActions.setMode(context, modes[it], ref) }
-        ImGui.dummy(0f, EditorFonts.px(2f))
         if (Widgets.ghostButton("Fly to")) EntityActions.flyTo(context, ref)
+        Widgets.tooltip("Fly the scene camera next to this entity")
         ImGui.sameLine()
         if (Widgets.ghostButton("Look at")) EntityActions.lookAt(context, ref)
-        ImGui.sameLine()
-        if (Widgets.ghostButton("Aim path here")) session.execute(SetAimTarget(EntityActions.targetId(ref)))
-        Widgets.tooltip("Keep the camera path pointed at this entity")
-        Widgets.header("Details")
-        if (Widgets.beginProperties("entity")) {
-            Widgets.property("Position")
-            Widgets.mutedText(String.format("%.1f   %.1f   %.1f", x, y, z))
-            if (!target.isRecorder) {
-                Widgets.property("Visible")
-                Widgets.toggle("##visible", !context.visuals.isHidden(target.id))?.let { visible ->
-                    if (visible) context.visuals.hiddenEntities.remove(target.id) else context.visuals.hiddenEntities.add(
-                        target.id
-                    )
+        Widgets.tooltip("Turn the scene camera toward this entity")
+        iconActions(
+            listOfNotNull(
+                IconAction("entity-aim", Icon.PATH, "Keep the camera path pointed at this entity", active(session.project.aimTargetId == EntityActions.targetId(ref))) {
+                    session.execute(SetAimTarget(EntityActions.targetId(ref)))
+                },
+                if (target.isRecorder) null else IconAction(
+                    "entity-visible",
+                    if (hidden) Icon.EYE_OFF else Icon.EYE,
+                    if (hidden) "Show this entity" else "Hide this entity"
+                ) {
+                    if (hidden) context.visuals.hiddenEntities.remove(target.id) else context.visuals.hiddenEntities.add(target.id)
+                },
+            ),
+            sameLine = true
+        )
+        if (section("Camera", "entity.camera", trailing = if (targeted) settings.mode.label else null)) {
+            val modes = listOf(CameraMode.FIRST_PERSON, CameraMode.ORBIT, CameraMode.FOLLOW, CameraMode.CHASE)
+            Widgets.segmented("entity-mode", modes.map { it.label }, if (targeted) modes.indexOf(settings.mode) else -1, 0f)
+                ?.let { EntityActions.setMode(context, modes[it], ref) }
+            Widgets.smallText("Look at this entity through a camera mode, from now on.", EditorTheme.TEXT_DIM.u32)
+        }
+        if (section("View keyframe", "entity.view", defaultOpen = false)) {
+            Widgets.smallText("Switch the camera to this entity from the playhead on.", EditorTheme.TEXT_DIM.u32)
+            val modes = listOf(CameraMode.FIRST_PERSON, CameraMode.ORBIT, CameraMode.FOLLOW, CameraMode.CHASE)
+            for ((index, mode) in modes.withIndex()) {
+                if (index > 0) ImGui.sameLine()
+                if (Widgets.ghostButton("${mode.label}##vk")) EntityActions.viewKeyframe(context, mode, ref)
+            }
+        }
+        if (section("Details", "entity.details")) {
+            if (Widgets.beginProperties("entity")) {
+                Widgets.property("Position")
+                Widgets.chips(listOf(String.format("%.1f", x), String.format("%.1f", y), String.format("%.1f", z)))
+                Widgets.property("Entity id")
+                Widgets.mutedText("#${target.id}")
+                if (target.uuid != null) {
+                    Widgets.property("UUID")
+                    Widgets.smallText(target.uuid.take(8), EditorTheme.TEXT_DIM.u32)
+                    ImGui.sameLine()
+                    if (Widgets.smallButton("Copy")) ImGui.setClipboardText(target.uuid)
                 }
+                Widgets.endProperties()
             }
-            if (target.uuid != null) {
-                Widgets.property("UUID")
-                Widgets.smallText(target.uuid.take(8), EditorTheme.TEXT_DIM.u32)
-                ImGui.sameLine()
-                if (Widgets.smallButton("Copy")) ImGui.setClipboardText(target.uuid)
-            }
-            Widgets.endProperties()
         }
-        Widgets.header("View keyframe")
-        Widgets.smallText("Switch the camera to this entity from the playhead on.", EditorTheme.TEXT_DIM.u32)
-        for ((index, mode) in modes.withIndex()) {
-            if (index > 0) ImGui.sameLine()
-            if (Widgets.ghostButton("${mode.label}##vk")) EntityActions.viewKeyframe(context, mode, ref)
-        }
-        if (PoseTools.poseable(session, target.id)) pose(session, target.id)
     }
 
-    private fun pose(session: EditorSession, entityId: Int) {
-        val count = PoseTools.keyframeCount(session, entityId)
-        Widgets.header("Pose")
-        Widgets.smallText(
-            if (count == 0) "Pose this model. Rotate tool (E) and click a limb in the scene, or use the sliders."
-            else "$count pose keyframes. Rotate tool (E) and click a limb in the scene, or use the sliders.",
-            EditorTheme.TEXT_DIM.u32
-        )
-        val keyed = PoseTools.hasKeyframeAtPlayhead(session, entityId)
-        if (keyed) {
-            if (Widgets.ghostButton("Keyed here")) Unit
-            Widgets.tooltip("There is a pose keyframe at the playhead")
-        } else if (Widgets.accentButton("Key pose here")) PoseTools.keyHere(session, entityId)
-        ImGui.sameLine()
-        if (Widgets.ghostButton("Release here")) PoseTools.releaseHere(session, entityId)
-        Widgets.tooltip("Empty keyframe: limbs fade back to the game's animation by this point")
-        if (count > 0) {
-            ImGui.sameLine()
-            if (Widgets.ghostButton("Clear all")) {
-                PoseTools.clearAll(session, entityId)
-                context.selectedBodyPart = null
-            }
-        }
-        val current = PoseTools.currentPose(session, entityId)
-        if (Widgets.beginProperties("pose")) {
-            for (part in BodyPart.entries) {
-                val posed = current[part]
-                val selected = context.selectedBodyPart == part
-                Widgets.property(part.label, if (posed == null) "Following the game's animation" else "Posed")
-                val buttons = ImGui.getFrameHeight() * 2f + ImGui.getStyle().itemSpacingX * 3f
-                val width = ((ImGui.getContentRegionAvailX() - buttons) / 3f).coerceAtLeast(EditorFonts.px(30f))
-                val values = doubleArrayOf(posed?.x ?: 0.0, posed?.y ?: 0.0, posed?.z ?: 0.0)
-                var changed = false
-                for (axis in 0 until 3) {
-                    if (axis > 0) ImGui.sameLine()
-                    ImGui.pushStyleColor(
-                        ImGuiCol.Text,
-                        if (posed == null) EditorTheme.TEXT_MUTED.u32 else EditorTheme.TEXT.u32
-                    )
-                    val edited = Widgets.slider(
-                        "##pose-${part.name}-$axis",
-                        values[axis].toFloat(),
-                        -180f,
-                        180f,
-                        width = width,
-                        labelOf = { String.format("%s %.0f°", AXIS_NAMES[axis], it) }
-                    )
-                    ImGui.popStyleColor()
-                    if (edited != null) {
-                        values[axis] = edited.toDouble()
-                        changed = true
-                    }
-                }
-                if (changed) PoseTools.setPart(session, entityId, part, PartPose(values[0], values[1], values[2], 1.0))
-                ImGui.sameLine()
-                if (Widgets.iconButton(
-                        "pose-pick-${part.name}",
-                        Icon.TOOL_ROTATE,
-                        ImGui.getFrameHeight(),
-                        "Pose this limb in the scene",
-                        active = selected,
-                        iconScale = 0.55f
-                    )
-                ) {
-                    context.selectedBodyPart = if (selected) null else part
-                    if (!selected) context.tool = SceneTool.ROTATE
-                }
-                ImGui.sameLine()
-                if (Widgets.iconButton(
-                        "pose-release-${part.name}",
-                        Icon.CLOSE,
-                        ImGui.getFrameHeight(),
-                        "Release this limb back to the game's animation",
-                        enabled = posed != null,
-                        iconScale = 0.5f
-                    ) && posed != null
-                ) {
-                    PoseTools.releasePart(session, entityId, part)
-                    if (selected) context.selectedBodyPart = null
-                }
-            }
-            Widgets.endProperties()
-        }
-    }
+    private fun active(value: Boolean): Int = if (value) EditorTheme.SELECTION.u32 else EditorTheme.TEXT.u32
 
     private fun lane(session: EditorSession, kind: LaneKind) {
         val state = session.project.lane(kind)
         val valueLane = ValueLane.entries.firstOrNull { it.kind == kind }
         val label = valueLane?.label ?: when (kind) {
             LaneKind.CAMERA -> "Camera path"
-            LaneKind.POSE -> "Poses"
             LaneKind.TEXTURE_PACK -> "Texture packs"
             else -> "View"
         }
         val count = when {
             kind == LaneKind.CAMERA -> session.project.camera.keyframeTimes().size
-            kind == LaneKind.POSE -> session.project.poses.values.sumOf { it.keyframes.size }
             kind == LaneKind.VIEW -> session.project.views.keyframes.size
             kind == LaneKind.TEXTURE_PACK -> session.project.packs.keyframes.size
             valueLane != null -> session.project.valueTrack(valueLane).keyframes.size
             else -> 0
         }
-        title(
-            if (kind == LaneKind.CAMERA) Icon.PATH else HierarchyPanel.LANE_ICONS[kind] ?: Icon.SLIDERS,
+        header(
+            laneIcon(kind),
             label,
-            "$count keyframes"
+            listOfNotNull("$count keyframes", "disabled".takeIf { state.muted })
         )
-        if (Widgets.beginProperties("lane")) {
-            Widgets.property("Enabled")
-            Widgets.toggle("##enabled", !state.muted)
-                ?.let { session.execute(SetLaneState(kind, state.copy(muted = !it))) }
-            if (kind == LaneKind.CAMERA) {
-                Widgets.property("Locked", "Prevents dragging keyframes on the timeline")
-                Widgets.toggle("##locked", state.locked)
-                    ?.let { session.execute(SetLaneState(kind, state.copy(locked = it))) }
-            }
-            if (kind == LaneKind.CAMERA || valueLane != null) {
-                val pre =
-                    if (valueLane == null) session.project.camera.preExtrapolation else session.project.valueTrack(
-                        valueLane
-                    ).preExtrapolation
-                val post =
-                    if (valueLane == null) session.project.camera.postExtrapolation else session.project.valueTrack(
-                        valueLane
-                    ).postExtrapolation
-                Widgets.property("Before start", "What the track does before its first keyframe")
-                Widgets.enumCombo("##pre", pre) { it.label }
-                    ?.let { session.execute(SetTrackExtrapolation(valueLane, it, post)) }
-                Widgets.property("After end", "Hold the last value, keep going, loop, or ping pong")
-                Widgets.enumCombo("##post", post) { it.label }
-                    ?.let { session.execute(SetTrackExtrapolation(valueLane, pre, it)) }
-            }
-            Widgets.endProperties()
-        }
-        if (kind == LaneKind.CAMERA || valueLane != null) {
-            if (Widgets.ghostButton("Open in Graph Editor")) context.openPanel("Graph Editor")
-        }
         if (kind == LaneKind.CAMERA) {
             if (Widgets.accentButton("Add keyframe here")) session.keyframeAtPlayhead(context.host.camera.currentPose())
+            Widgets.tooltip("Add a camera keyframe at the playhead from the current view  Ctrl+K")
             ImGui.sameLine()
-            if (count > 0 && Widgets.ghostButton("Select all keyframes")) session.selection =
-                Selection(keyframeTimes = session.project.camera.keyframeTimes().toSet())
-            Widgets.smallText(
-                "Path tools live in the Camera panel and the track menu on the timeline.",
-                EditorTheme.TEXT_DIM.u32
-            )
-        } else if (valueLane != null) {
-            Widgets.smallText(LANE_HINTS[valueLane] ?: "", EditorTheme.TEXT_DIM.u32)
+        }
+        if (kind == LaneKind.CAMERA || valueLane != null) {
+            if (Widgets.ghostButton("Graph Editor")) context.openPanel("Graph Editor")
+        }
+        if (kind == LaneKind.CAMERA && count > 0) {
+            ImGui.sameLine()
+            if (Widgets.ghostButton("Select all")) session.selection = Selection(keyframeTimes = session.project.camera.keyframeTimes().toSet())
+        }
+        if (section("Track", "lane.track")) {
+            if (Widgets.beginProperties("lane")) {
+                Widgets.property("Enabled")
+                Widgets.toggle("##enabled", !state.muted)
+                    ?.let { session.execute(SetLaneState(kind, state.copy(muted = !it))) }
+                if (kind == LaneKind.CAMERA) {
+                    Widgets.property("Locked", "Prevents dragging keyframes on the timeline")
+                    Widgets.toggle("##locked", state.locked)
+                        ?.let { session.execute(SetLaneState(kind, state.copy(locked = it))) }
+                }
+                if (kind == LaneKind.CAMERA || valueLane != null) {
+                    val pre = if (valueLane == null) session.project.camera.preExtrapolation else session.project.valueTrack(valueLane).preExtrapolation
+                    val post = if (valueLane == null) session.project.camera.postExtrapolation else session.project.valueTrack(valueLane).postExtrapolation
+                    Widgets.property("Before start", "What the track does before its first keyframe")
+                    Widgets.enumCombo("##pre", pre) { it.label }
+                        ?.let { session.execute(SetTrackExtrapolation(valueLane, it, post)) }
+                    Widgets.property("After end", "Hold the last value, keep going, loop, or ping pong")
+                    Widgets.enumCombo("##post", post) { it.label }
+                        ?.let { session.execute(SetTrackExtrapolation(valueLane, pre, it)) }
+                }
+                Widgets.endProperties()
+            }
+            val hint = when {
+                kind == LaneKind.CAMERA -> "Path tools live in the Camera panel and the track menu on the timeline."
+                valueLane != null -> LANE_HINTS[valueLane]
+                else -> null
+            }
+            if (hint != null) Widgets.wrappedText(hint, EditorTheme.TEXT_DIM.u32)
         }
     }
 
@@ -854,76 +848,77 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
             infoPath = recording
             info = context.host.replay.describe(recording)
         }
-        title(
+        header(
             Icon.FOLDER,
             project.name,
             listOfNotNull(
                 info?.server?.takeIf { it.isNotBlank() },
-                info?.player?.takeIf { it.isNotBlank() }?.let { "as $it" }).joinToString("    ").ifEmpty { "Project" })
-        if (Widgets.beginProperties("project")) {
-            Widgets.property("Name")
-            Widgets.textInput("##name", project.name, 64)?.let { session.execute(SetProjectName(it)) }
-            Widgets.property("Recorded")
-            Widgets.mutedText(info?.startEpochMillis?.takeIf { it > 0L }
-                ?.let { DISPLAY_FORMAT.format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault())) } ?: "Unknown")
-            Widgets.property("Length")
-            val size = runCatching { Files.size(recording) }.getOrDefault(0L)
-            Widgets.mutedText("${TimeFormat.clock(replay.durationNanos)}    ${formatSize(size)}")
-            Widgets.property("Range")
-            val outNanos = if (project.outPointNanos > 0L) project.outPointNanos else replay.durationNanos
-            Widgets.rangeText(TimeFormat.short(project.inPointNanos), TimeFormat.short(outNanos))
-            ImGui.sameLine()
-            if (Widgets.iconButton(
-                    "range-reset",
-                    Icon.CLOSE,
-                    EditorFonts.px(20f),
-                    "Clear the in and out points",
-                    iconScale = 0.5f
-                )
-            ) session.execute(SetInOutPoints(0L, 0L))
-            if (project.segments.size > 1 || project.isSequence) {
-                Widgets.property("Sequence")
-                Widgets.mutedText("${project.segments.size} segments")
-                ImGui.sameLine()
-                if (Widgets.smallButton("Edit")) context.openPanel("Sequence")
-                if (project.sequenceStale) {
-                    ImGui.sameLine()
-                    Widgets.pill("rebuild needed", EditorTheme.WARNING)
-                }
-            }
-            Widgets.property("Status")
-            if (project.dirty) Widgets.pill(
-                if (context.ui.autosave) "autosaving" else "unsaved",
-                EditorTheme.WARNING
-            ) else Widgets.pill("saved", EditorTheme.SUCCESS)
-            Widgets.endProperties()
-        }
+                info?.player?.takeIf { it.isNotBlank() }?.let { "as $it" },
+                if (project.dirty) (if (context.ui.autosave) "autosaving" else "unsaved") else "saved"
+            )
+        )
         if (Widgets.accentButton("Save")) save(session)
         ImGui.sameLine()
         if (Widgets.ghostButton("Set thumbnail")) context.host.captureThumbnail(recording)
         Widgets.tooltip("Use the current view as this recording's thumbnail")
-        ImGui.sameLine()
-        if (Widgets.ghostButton("Library")) context.host.later { context.host.replay.close() }
-        Widgets.header("Contents")
-        if (Widgets.beginProperties("contents")) {
-            Widgets.property("Keyframes")
-            val keyframes = project.camera.keyframeTimes().size
-            Widgets.mutedText(
-                if (keyframes == 0) "None yet, press Ctrl+K" else "$keyframes over ${
-                    TimeFormat.short(
-                        project.camera.durationNanos
-                    )
-                }"
-            )
-            Widgets.property("Clips")
-            Widgets.mutedText(if (project.clips.isEmpty()) "None" else "${project.clips.size}")
-            Widgets.property("Markers")
-            Widgets.mutedText(if (project.markers.isEmpty()) "None" else "${project.markers.size}")
-            Widgets.property("Tracks")
-            val tracks = ValueLane.entries.filter { project.valueTrack(it).keyframes.isNotEmpty() }
-                .map { it.label } + (if (project.views.keyframes.isNotEmpty()) listOf("View") else emptyList())
-            Widgets.mutedText(if (tracks.isEmpty()) "None" else tracks.joinToString(", "))
-            Widgets.endProperties()
+        iconActions(
+            listOf(
+                IconAction("project-export", Icon.EXPORT, "Export video  Ctrl+E") { context.openPanel("Export") },
+                IconAction("project-library", Icon.LIST, "Close the replay and go back to the library") {
+                    context.host.later { context.host.replay.close() }
+                },
+            ),
+            sameLine = true
+        )
+        if (section("Project", "project.details")) {
+            if (Widgets.beginProperties("project")) {
+                Widgets.property("Name")
+                Widgets.textInput("##name", project.name, 64)?.let { session.execute(SetProjectName(it)) }
+                Widgets.property("Recorded")
+                Widgets.mutedText(info?.startEpochMillis?.takeIf { it > 0L }
+                    ?.let { DISPLAY_FORMAT.format(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault())) } ?: "Unknown")
+                Widgets.property("Length")
+                val size = runCatching { Files.size(recording) }.getOrDefault(0L)
+                Widgets.chips(listOf(TimeFormat.clock(replay.durationNanos), formatSize(size)))
+                Widgets.property("Range")
+                val outNanos = if (project.outPointNanos > 0L) project.outPointNanos else replay.durationNanos
+                Widgets.rangeText(TimeFormat.short(project.inPointNanos), TimeFormat.short(outNanos))
+                if (project.inPointNanos > 0L || project.outPointNanos > 0L) {
+                    ImGui.sameLine()
+                    if (Widgets.iconButton("range-reset", Icon.CLOSE, EditorFonts.px(20f), "Clear the in and out points", iconScale = 0.5f)) {
+                        session.execute(SetInOutPoints(0L, 0L))
+                    }
+                }
+                if (project.segments.size > 1 || project.isSequence) {
+                    Widgets.property("Sequence")
+                    Widgets.mutedText("${project.segments.size} segments")
+                    ImGui.sameLine()
+                    if (Widgets.smallButton("Edit")) context.openPanel("Sequence")
+                    if (project.sequenceStale) {
+                        ImGui.sameLine()
+                        Widgets.pill("rebuild needed", EditorTheme.WARNING)
+                    }
+                }
+                Widgets.endProperties()
+            }
+        }
+        if (section("Contents", "project.contents")) {
+            if (Widgets.beginProperties("contents")) {
+                Widgets.property("Keyframes")
+                val keyframes = project.camera.keyframeTimes().size
+                Widgets.mutedText(
+                    if (keyframes == 0) "None yet, press Ctrl+K" else "$keyframes over ${TimeFormat.short(project.camera.durationNanos)}"
+                )
+                Widgets.property("Clips")
+                Widgets.mutedText(if (project.clips.isEmpty()) "None" else "${project.clips.size}")
+                Widgets.property("Markers")
+                Widgets.mutedText(if (project.markers.isEmpty()) "None" else "${project.markers.size}")
+                Widgets.property("Tracks")
+                val tracks = ValueLane.entries.filter { project.valueTrack(it).keyframes.isNotEmpty() }
+                    .map { it.label } + (if (project.views.keyframes.isNotEmpty()) listOf("View") else emptyList())
+                if (tracks.isEmpty()) Widgets.mutedText("None") else Widgets.chips(tracks)
+                Widgets.endProperties()
+            }
         }
     }
 
@@ -940,6 +935,19 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         return entity.uuid?.let { shadow.players.profile(it)?.name } ?: "#$id"
     }
 
+    private fun laneIcon(kind: LaneKind): Icon = when (kind) {
+        LaneKind.CAMERA -> Icon.PATH
+        LaneKind.SPEED -> Icon.GAUGE
+        LaneKind.FOV -> Icon.APERTURE
+        LaneKind.TIME_OF_DAY -> Icon.SUN
+        LaneKind.SHAKE, LaneKind.SHAKE_FREQUENCY -> Icon.WAVE
+        LaneKind.VIEW -> Icon.EYE
+        LaneKind.FREEZE -> Icon.SNOWFLAKE
+        LaneKind.FOCUS -> Icon.FOCUS
+        LaneKind.TEXTURE_PACK -> Icon.PACKAGE
+        else -> Icon.SLIDERS
+    }
+
     private fun formatSize(bytes: Long): String = when {
         bytes >= 1L shl 30 -> String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
         bytes >= 1L shl 20 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
@@ -949,14 +957,14 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
 
     private fun easingSection(
         session: EditorSession,
-        header: String,
+        key: String,
         easing: Easing,
         next: Boolean,
         times: Set<Long>,
         keys: Set<ValueKey>,
         set: (Easing) -> Unit,
     ) {
-        Widgets.header(header)
+        if (!section("Easing", key, trailing = if (next) easing.label else "Last keyframe")) return
         val width = (ImGui.getContentRegionAvailX() - EditorFonts.px(6f) * 3f) / 4f
         if (Widgets.button("Ease", width)) session.execute(EaseKeyframes.easyEase(times, keys))
         Widgets.tooltip("Slow into and out of the selected keyframes  F9")
@@ -970,7 +978,7 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
         if (Widgets.button("Linear", width)) session.execute(EaseKeyframes.linear(times, keys))
         Widgets.tooltip("Straight speed through the selected keyframes")
         if (!next) {
-            Widgets.smallText("Last keyframe: nothing follows it to ease into.", EditorTheme.TEXT_DIM.u32)
+            Widgets.wrappedText("Nothing follows the last keyframe, so there is no segment to ease.", EditorTheme.TEXT_DIM.u32)
             return
         }
         ImGui.dummy(0f, EditorFonts.px(4f))
@@ -986,38 +994,31 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
     private fun stretchSection(session: EditorSession, times: Set<Long>, keys: Set<ValueKey>) {
         val all = (times + keys.map { it.nanos }).sorted()
         if (all.size < 2) return
-        Widgets.header("Time stretch")
         val span = all.last() - all.first()
-        Widgets.smallText("Selection spans ${TimeFormat.short(span)}", EditorTheme.TEXT_DIM.u32)
+        if (!section("Time stretch", "keyframes.stretch", trailing = TimeFormat.short(span))) return
         val width = (ImGui.getContentRegionAvailX() - EditorFonts.px(6f) * 3f) / 4f
-        for ((index, factor) in listOf(0.5, 0.8, 1.25, 2.0).withIndex()) {
+        for ((index, factor) in STRETCH_FACTORS.withIndex()) {
             if (index > 0) ImGui.sameLine()
-            if (Widgets.button(
-                    "${if (factor < 1.0) "" else "x"}${if (factor == 0.5) "1/2" else if (factor == 0.8) "4/5" else if (factor == 1.25) "1.25" else "2"}",
-                    width
-                )
-            ) {
+            if (Widgets.button(STRETCH_LABELS[index], width)) {
                 val command = ScaleKeyframes(times, keys, all.first(), factor)
                 session.execute(command)
                 session.selection = Selection(keyframeTimes = command.resultTimes, valueKeys = command.resultValueKeys)
             }
+            Widgets.tooltip("Stretch the selection in time around its first keyframe. Alt-drag the ends in the Graph Editor for free scaling.")
         }
-        Widgets.tooltip("Stretches the selection in time around its first keyframe. Alt-drag the ends in the Graph Editor for free scaling.")
-        if (Widgets.ghostButton("Reverse order")) {
-            val command = ReverseKeyframes(times, keys)
-            session.execute(command)
-        }
+        if (Widgets.ghostButton("Reverse order")) session.execute(ReverseKeyframes(times, keys))
         Widgets.tooltip("Plays the selected keyframes backwards")
     }
 
     private companion object {
-        val AXIS_NAMES = arrayOf("X", "Y", "Z")
         val MODE_TOOLTIPS = listOf(
             "Straight line at constant speed",
             "Smooth curve through neighbouring keyframes",
             "Curve with adjustable handles",
             "Hold this pose until the next keyframe"
         )
+        val STRETCH_FACTORS = listOf(0.5, 0.8, 1.25, 2.0)
+        val STRETCH_LABELS = listOf("1/2", "4/5", "x1.25", "x2")
         val VALUE_PRESETS = mapOf(
             ValueLane.SPEED to listOf(0.25, 0.5, 1.0, 2.0, 4.0),
             ValueLane.FOV to listOf(30.0, 50.0, 70.0, 90.0, 110.0),

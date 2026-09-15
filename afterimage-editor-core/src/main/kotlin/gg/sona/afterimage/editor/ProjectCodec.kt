@@ -11,9 +11,6 @@ import gg.sona.afterimage.clip.codec.CameraPathCodec
 import gg.sona.afterimage.clip.codec.ClipCodec
 import gg.sona.afterimage.clip.codec.EasingCodec
 import gg.sona.afterimage.editor.look.LookSettings
-import gg.sona.afterimage.editor.pose.BodyPart
-import gg.sona.afterimage.editor.pose.BodyPose
-import gg.sona.afterimage.editor.pose.PartPose
 import gg.sona.afterimage.net.PacketFormatException
 import gg.sona.afterimage.net.PacketReader
 import gg.sona.afterimage.net.PacketWriter
@@ -24,8 +21,9 @@ import java.nio.file.StandardCopyOption
 import java.util.*
 
 object ProjectCodec {
-    private const val VERSION = 15
+    private const val VERSION = 16
     private const val LEGACY_BLOCK_OVERRIDE_ORDINAL = 14
+    private const val LEGACY_POSE_ORDINAL = 17
     private val MAGIC = byteArrayOf('R'.code.toByte(), 'C'.code.toByte(), 'P'.code.toByte(), 'J'.code.toByte())
 
     fun encode(project: EditorProject): ByteArray {
@@ -93,18 +91,6 @@ object ProjectCodec {
             writer.writeString(label).writeByte(kind.ordinal).writeDouble(score)
             writer.writeByte(origin.ordinal).writeInt(entityId)
         }
-        writer.writeVarInt(project.poses.size)
-        for ((entityId, track) in project.poses) {
-            writer.writeInt(entityId).writeVarInt(track.keyframes.size)
-            for ((timeNanos, value, easing, mode) in track.keyframes) {
-                writer.writeLong(timeNanos)
-                EasingCodec.write(writer, easing)
-                writer.writeByte(mode.ordinal)
-                writer.writeVarInt(value.parts.size)
-                for ((part, pose) in value.parts) writer.writeByte(part.ordinal).writeFloat(pose.x.toFloat())
-                    .writeFloat(pose.y.toFloat()).writeFloat(pose.z.toFloat()).writeFloat(pose.weight.toFloat())
-            }
-        }
         writeLook(writer, project.look)
         writer.writeVarInt(project.packs.keyframes.size)
         for ((timeNanos, state) in project.packs.keyframes) {
@@ -151,6 +137,10 @@ object ProjectCodec {
             if (version < 14) {
                 if (ordinal == LEGACY_BLOCK_OVERRIDE_ORDINAL) return@repeat
                 if (ordinal > LEGACY_BLOCK_OVERRIDE_ORDINAL) ordinal--
+            }
+            if (version < 16) {
+                if (ordinal == LEGACY_POSE_ORDINAL) return@repeat
+                if (ordinal > LEGACY_POSE_ORDINAL) ordinal--
             }
             val kind = LaneKind.entries[ordinal.coerceIn(0, LaneKind.entries.size - 1)]
             project.replaceLane(kind, LaneState(kind, name, muted, locked))
@@ -273,24 +263,17 @@ object ProjectCodec {
                 )
             }
         }
-        if (version >= 13) {
+        if (version in 13..15) {
             repeat(reader.readVarInt()) {
-                val track = project.poseTrack(reader.readInt())
+                reader.readInt()
                 repeat(reader.readVarInt()) {
-                    val time = reader.readLong()
-                    val easing = EasingCodec.read(reader, legacy = false)
-                    val mode = SegmentMode.entries[reader.readUnsignedByte().coerceIn(0, SegmentMode.entries.size - 1)]
-                    val parts = LinkedHashMap<BodyPart, PartPose>()
+                    reader.readLong()
+                    EasingCodec.read(reader, legacy = false)
+                    reader.readUnsignedByte()
                     repeat(reader.readVarInt()) {
-                        val part = BodyPart.of(reader.readUnsignedByte())
-                        parts[part] = PartPose(
-                            reader.readFloat().toDouble(),
-                            reader.readFloat().toDouble(),
-                            reader.readFloat().toDouble(),
-                            reader.readFloat().toDouble()
-                        )
+                        reader.readUnsignedByte()
+                        repeat(4) { reader.readFloat() }
                     }
-                    track.set(Keyframe(time, BodyPose(parts), easing, mode))
                 }
             }
         }

@@ -87,7 +87,6 @@ class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
     private var thumbnailRecording: Path? = null
     private var returnToLibrary = false
     override val visuals = VisualSettings()
-    val poseDriver = PoseDriver()
     val visualsController = VisualsController(minecraft, visuals)
     private val taskbarManager = TaskbarManager()
     val context = EditorContext(this, clips, exporter)
@@ -304,12 +303,6 @@ class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
         replayer.onClosed = ::onReplayClosed
         gizmoRenderer.batch = { gizmos }
         gizmoRenderer.enabled = { replayer.isReplaying && workspace.isOpen && !exporter.isExporting }
-        poseDriver.active = { replayer.isReplaying }
-        poseDriver.session = { context.session }
-        poseDriver.captureEntity = { context.selectedEntityId }
-        poseDriver.renderPosition =
-            { entity -> cameraDriver.entitySmoother.renderPosition(replayer.session, entity)?.copyOf() }
-        poseDriver.tickDelta = { (minecraft as MinecraftAccessor).`afterimage$timer`().partialTick }
         visualsController.active = { replayer.isReplaying }
         viewportPicker.recorderEntityId = { replayer.session?.shadow?.localPlayer?.entityId ?: Int.MIN_VALUE }
         viewportPicker.recorderName = { replayer.session?.shadow?.localPlayer?.name }
@@ -354,9 +347,6 @@ class AfterimageRuntime(val minecraft: Minecraft) : EditorHost {
 
     override fun pickEntity(normalizedX: Float, normalizedY: Float): ViewportPick? =
         if (replayer.isReplaying) viewportPicker.pick(normalizedX, normalizedY) else null
-
-    override fun entityModel(entityId: Int): DoubleArray? =
-        if (replayer.isReplaying) poseDriver.captured(entityId) else null
 
     override fun project(x: Double, y: Double, z: Double): FloatArray? =
         if (replayer.isReplaying) viewportPicker.project(x, y, z) else null

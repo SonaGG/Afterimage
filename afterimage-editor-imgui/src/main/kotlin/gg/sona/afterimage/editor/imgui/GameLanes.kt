@@ -46,8 +46,12 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
     private var sounds = IntArray(0)
     private val projectileEnds = HashMap<Int, Long>()
     private var dimensionSegments: List<Triple<Long, Long, Int>> = emptyList()
-    val hiddenWorldRows = EnumSet.noneOf(WorldRow::class.java)
-    var showAllPlayers = false
+    private val hiddenWorldRows: UiPreferences.PersistedSet get() = context.ui.hiddenWorldRows
+    private var showAllPlayers: Boolean
+        get() = context.ui.showAllPlayers
+        set(value) {
+            context.ui.showAllPlayers = value
+        }
     private val renameBuffer = ImString("", 64)
 
     val playerRows: List<PlayerRow> get() = rows
@@ -621,67 +625,48 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
         val track = row.tracks.firstOrNull { it.covers(tick) }
         val nearest = nearestPlayerEvent(index, row, nanos, sub == SubRow.ACTIONS)
         ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-        ImGui.setTooltip(whatHappened(index, row, track, tick, nanos, nearest))
+        TimelineTooltip.show {
+            TimelineTooltip.title(Icon.PERSON, row.color, row.name, TimeFormat.clock(nanos))
+            if (track == null) TimelineTooltip.text("Not in view") else playerDetails(index, track, tick)
+            if (nearest >= 0) {
+                val delta = (nanos - index.events.nanos[nearest]) / 1_000_000_000.0
+                val moment = when {
+                    abs(delta) < 0.05 -> "now"
+                    delta > 0 -> String.format("%.1f s ago", delta)
+                    else -> String.format("in %.1f s", -delta)
+                }
+                TimelineTooltip.text("${labels?.label(nearest) ?: ""}   $moment")
+            }
+            TimelineTooltip.hints(listOf("Click to jump", "Double-click to expand"))
+        }
     }
 
-    private fun whatHappened(
-        index: ReplayIndex,
-        row: PlayerRow,
-        track: EntityTrack?,
-        tick: Int,
-        nanos: Long,
-        nearest: Int
-    ): String {
-        val lines = ArrayList<String>()
-        lines += "${row.name}   ${TimeFormat.clock(nanos)}"
-        if (track == null) {
-            lines += "Not in view"
-        } else {
-            val i = track.index(tick)
-            val health = track.health[i]
-            val parts = ArrayList<String>()
-            parts += if (health.isNaN()) "health unknown" else String.format(
-                "%.1f hp  (%.1f hearts)",
-                health,
-                health / 2f
-            )
-            val held = track.held[i].toInt()
-            if (held >= 0) parts += Items.label(held)
-            val states = ArrayList<String>()
-            if (track.flag(tick, EntityTrack.FLAG_SPRINTING)) states += "sprinting"
-            if (track.flag(tick, EntityTrack.FLAG_SNEAKING)) states += "sneaking"
-            if (track.flag(tick, EntityTrack.FLAG_USING)) states += "using item"
-            if (track.flag(tick, EntityTrack.FLAG_ON_FIRE)) states += "burning"
-            if (!track.flag(tick, EntityTrack.FLAG_ON_GROUND)) states += "airborne"
-            if (track.vehicle[i] >= 0) states += "riding"
-            lines += parts.joinToString("   ")
-            val speed = track.speedAt(tick, index.tickSeconds)
-            val looking = lookingAt(index, track, tick)
-            val near = index.players.count {
-                it !== track && it.entityId != track.entityId && it.covers(tick) && distance(
-                    track,
-                    it,
-                    tick
-                ) <= 10.0
-            }
-            val second = ArrayList<String>()
-            second += String.format("%.1f m/s", speed)
-            if (looking != null) second += "looking at $looking"
-            second += "$near player${if (near == 1) "" else "s"} within 10 m"
-            lines += second.joinToString("   ")
-            if (states.isNotEmpty()) lines += states.joinToString(", ")
-            lines += String.format("at %.1f  %.1f  %.1f", track.x[i], track.y[i], track.z[i])
+    private fun playerDetails(index: ReplayIndex, track: EntityTrack, tick: Int) {
+        val i = track.index(tick)
+        val health = track.health[i]
+        val chips = ArrayList<String>()
+        chips += if (health.isNaN()) "Health unknown" else String.format("%.1f hearts", health / 2f)
+        val held = track.held[i].toInt()
+        if (held >= 0) chips += Items.label(held)
+        if (track.flag(tick, EntityTrack.FLAG_SPRINTING)) chips += "Sprinting"
+        if (track.flag(tick, EntityTrack.FLAG_SNEAKING)) chips += "Sneaking"
+        if (track.flag(tick, EntityTrack.FLAG_USING)) chips += "Using item"
+        if (track.flag(tick, EntityTrack.FLAG_ON_FIRE)) chips += "Burning"
+        if (!track.flag(tick, EntityTrack.FLAG_ON_GROUND)) chips += "Airborne"
+        if (track.vehicle[i] >= 0) chips += "Riding"
+        TimelineTooltip.chips(chips)
+        val near = index.players.count {
+            it !== track && it.entityId != track.entityId && it.covers(tick) && distance(track, it, tick) <= 10.0
         }
-        if (nearest >= 0) {
-            val delta = (nanos - index.events.nanos[nearest]) / 1_000_000_000.0
-            val when_ = if (abs(delta) < 0.05) "now" else if (delta > 0) String.format(
-                "%.1f s ago",
-                delta
-            ) else String.format("in %.1f s", -delta)
-            lines += "${labels?.label(nearest) ?: ""}   $when_"
-        }
-        lines += "Click to jump   Double-click to expand"
-        return lines.joinToString("\n")
+        val rows = ArrayList<TimelineTooltip.Row>()
+        rows += TimelineTooltip.Row("Speed", listOf("" to String.format("%.1f m/s", track.speedAt(tick, index.tickSeconds))))
+        lookingAt(index, track, tick)?.let { rows += TimelineTooltip.Row("Looking at", listOf("" to it)) }
+        rows += TimelineTooltip.Row("Nearby", listOf("" to "$near player${if (near == 1) "" else "s"} within 10 m"))
+        rows += TimelineTooltip.Row(
+            "Position",
+            listOf("X" to String.format("%.1f", track.x[i]), "Y" to String.format("%.1f", track.y[i]), "Z" to String.format("%.1f", track.z[i]))
+        )
+        TimelineTooltip.grid(rows)
     }
 
     private fun nearestPlayerEvent(index: ReplayIndex, row: PlayerRow, nanos: Long, actions: Boolean): Int {
@@ -736,26 +721,15 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
                     count++
                     i++
                 }
-                if (count > 0) ImGui.setTooltip(
-                    if (count == 1) "${labels?.blockLabel(first)}\n${TimeFormat.clock(blocks.nanos[first])}" else "$count block changes around ${
-                        TimeFormat.clock(
-                            nanos
-                        )
-                    }"
-                )
+                if (count == 1) TimelineTooltip.simple(row.icon, EditorTheme.KEYFRAME_LINEAR, labels?.blockLabel(first) ?: "Block change", TimeFormat.clock(blocks.nanos[first]))
+                else if (count > 1) TimelineTooltip.simple(row.icon, EditorTheme.KEYFRAME_LINEAR, "$count block changes", "around ${TimeFormat.clock(nanos)}")
             }
 
-            WorldRow.EXPLOSIONS -> nearestOf(index, explosions, nanos, grab * 3)?.let { tooltipEvent(index, it) }
-            WorldRow.PROJECTILES -> nearestOf(index, projectiles, nanos, Nanos.ofSeconds(2))?.let {
-                tooltipEvent(
-                    index,
-                    it
-                )
-            }
-
-            WorldRow.SOUNDS -> nearestOf(index, sounds, nanos, grab)?.let { tooltipEvent(index, it) }
+            WorldRow.EXPLOSIONS -> nearestOf(index, explosions, nanos, grab * 3)?.let { tooltipEvent(index, row, it) }
+            WorldRow.PROJECTILES -> nearestOf(index, projectiles, nanos, Nanos.ofSeconds(2))?.let { tooltipEvent(index, row, it) }
+            WorldRow.SOUNDS -> nearestOf(index, sounds, nanos, grab)?.let { tooltipEvent(index, row, it) }
             WorldRow.DIMENSION -> dimensionSegments.firstOrNull { nanos in it.first..it.second }?.let {
-                ImGui.setTooltip("${dimensionName(it.third)}\n${TimeFormat.clock(it.first)} - ${TimeFormat.clock(it.second)}")
+                TimelineTooltip.simple(row.icon, EditorTheme.SUCCESS, dimensionName(it.third), "${TimeFormat.clock(it.first)} to ${TimeFormat.clock(it.second)}")
             }
         }
     }
@@ -780,11 +754,11 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
 
     fun hoverMoment(moment: Moment, kept: Boolean) {
         ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-        ImGui.setTooltip(
-            "${moment.label}\n${moment.kind.label}   score ${(moment.score * 100).toInt()}   ${if (kept) "kept" else "detected"}\n${
-                TimeFormat.clock(moment.nanos)
-            } - ${TimeFormat.clock(moment.endNanos)}\nClick to select   Double-click to play   Right-click for actions"
-        )
+        TimelineTooltip.show {
+            TimelineTooltip.title(Icon.BOOKMARK, EditorTheme.Rgb(moment.kind.color), moment.label, "${TimeFormat.clock(moment.nanos)} to ${TimeFormat.clock(moment.endNanos)}")
+            TimelineTooltip.chips(listOf(moment.kind.label, "Score ${(moment.score * 100).toInt()}", if (kept) "Kept" else "Detected"))
+            TimelineTooltip.hints(listOf("Click to select", "Double-click to play", "Right-click for actions"))
+        }
     }
 
     fun momentMenu(session: EditorSession, moment: Moment) = MomentActions.menu(context, session, moment, renameBuffer)
@@ -859,15 +833,24 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
         return if (best >= 0) best else null
     }
 
-    private fun tooltipEvent(index: ReplayIndex, i: Int) {
+    private fun tooltipEvent(index: ReplayIndex, row: WorldRow, i: Int) {
         ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-        val position = if (index.events.hasPosition(i)) String.format(
-            "\nat %.1f  %.1f  %.1f",
-            index.events.x[i],
-            index.events.y[i],
-            index.events.z[i]
-        ) else ""
-        ImGui.setTooltip("${labels?.label(i)}\n${TimeFormat.clock(index.events.nanos[i])}$position\nClick to jump")
+        TimelineTooltip.show {
+            TimelineTooltip.title(row.icon, EditorTheme.EVENT_HIT, labels?.label(i) ?: row.label, TimeFormat.clock(index.events.nanos[i]))
+            if (index.events.hasPosition(i)) TimelineTooltip.grid(
+                listOf(
+                    TimelineTooltip.Row(
+                        "Position",
+                        listOf(
+                            "X" to String.format("%.1f", index.events.x[i]),
+                            "Y" to String.format("%.1f", index.events.y[i]),
+                            "Z" to String.format("%.1f", index.events.z[i])
+                        )
+                    )
+                )
+            )
+            TimelineTooltip.hints(listOf("Click to jump"))
+        }
     }
 
     private fun lookingAt(index: ReplayIndex, from: EntityTrack, tick: Int): String? {

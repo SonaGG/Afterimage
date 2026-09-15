@@ -40,6 +40,8 @@ class GraphEditorPanel(private val context: EditorContext) :
     private val hidden = HashSet<String>()
     private var solo: String? = null
     private var hoveredChannel: GraphChannel? = null
+    private var activeChannel: GraphChannel? = null
+    private var pendingHovered: GraphChannel? = null
 
     private var originX = 0f
     private var originY = 0f
@@ -79,6 +81,8 @@ class GraphEditorPanel(private val context: EditorContext) :
             return
         }
         duration = maxOf(1L, replay.durationNanos)
+        hoveredChannel = pendingHovered
+        pendingHovered = null
         toolbar(session)
         listX = ImGui.getCursorScreenPosX()
         originX = listX + LIST_WIDTH
@@ -87,7 +91,7 @@ class GraphEditorPanel(private val context: EditorContext) :
         height = maxOf(1f, ImGui.getContentRegionAvailY() - 2f)
         syncView()
         collectChannels(session)
-        computeRanges(session.project)
+        if (drag == Drag.NONE) computeRanges(session.project, reset = false)
         if (fitRequested || lastFitVersion < 0L) {
             fitAll(session, time = fitRequested || !linked)
             fitRequested = false
@@ -192,7 +196,7 @@ class GraphEditorPanel(private val context: EditorContext) :
                 valueMax = hi
             }
         }
-        computeRanges(project)
+        computeRanges(project, reset = true)
     }
 
     private fun fitSelection(session: EditorSession) {
@@ -204,6 +208,7 @@ class GraphEditorPanel(private val context: EditorContext) :
         }
         val span = maxOf(Nanos.ofSeconds(1), times.last() - times.first())
         setVisible(times.first() - span / 4, span + span / 2)
+        computeRanges(session.project, reset = true)
     }
 
     private fun xAt(nanos: Long): Float = originX + ((nanos - offsetNanos).toDouble() / visibleNanos * width).toFloat()
@@ -247,8 +252,8 @@ class GraphEditorPanel(private val context: EditorContext) :
         }
     }
 
-    private fun computeRanges(project: EditorProject) {
-        ranges.clear()
+    private fun computeRanges(project: EditorProject, reset: Boolean) {
+        if (reset) ranges.clear()
         val step = maxOf(1L, (visibleNanos / (width / CURVE_STEP)).toLong())
         for (channel in visibleChannels) {
             var lo = Double.MAX_VALUE
@@ -293,7 +298,9 @@ class GraphEditorPanel(private val context: EditorContext) :
                 hi += pad
             }
             val margin = (hi - lo) * (if (mode == Mode.SPEED) 0.12 else 0.1)
-            ranges[channel.id] = Range(if (mode == Mode.SPEED) 0.0 else lo - margin, hi + margin)
+            val fresh = Range(if (mode == Mode.SPEED) 0.0 else lo - margin, hi + margin)
+            val existing = ranges[channel.id]
+            ranges[channel.id] = if (existing == null || reset) fresh else Range(min(existing.lo, fresh.lo), max(existing.hi, fresh.hi))
         }
     }
 
@@ -331,7 +338,7 @@ class GraphEditorPanel(private val context: EditorContext) :
             val pressed = ImGui.invisibleButton("row-${channel.id}", LIST_WIDTH - EditorFonts.px(30f), rowHeight)
             val rowHovered = ImGui.isItemHovered()
             if (rowHovered) list.addRectFilled(listX, y, originX - 1f, y + rowHeight, EditorTheme.CONTROL.u32(0.5f))
-            if (rowHovered) hoveredChannel = channel
+            if (rowHovered) pendingHovered = channel
             val swatchX = listX + EditorFonts.px(12f)
             val swatchY = y + rowHeight / 2f
             list.addCircleFilled(
@@ -391,6 +398,7 @@ class GraphEditorPanel(private val context: EditorContext) :
                                 true
                             )
                         }
+                    activeChannel = channel
                 } else {
                     if (channel.id in hidden) hidden -= channel.id else hidden += channel.id
                 }
@@ -541,13 +549,17 @@ class GraphEditorPanel(private val context: EditorContext) :
         Widgets.tooltip("What the track does before its first and after its last keyframe")
     }
 
+    private fun focusChannel(): GraphChannel? =
+        activeChannel?.takeIf { it in visibleChannels } ?: hoveredChannel?.takeIf { it in visibleChannels }
+
     private fun hoveredOrSelectedChannel(session: EditorSession): GraphChannel? {
+        focusChannel()?.let { return it }
         val selection = session.selection
         if (selection.keyframeTimes.isNotEmpty()) return visibleChannels.firstOrNull { it is GraphChannel.Camera }
             ?: GraphChannel.ALL.first()
         selection.valueKeys.firstOrNull()
             ?.let { key -> return GraphChannel.ALL.firstOrNull { it is GraphChannel.Value && it.lane == key.lane } }
-        return hoveredChannel?.takeIf { it in visibleChannels }
+        return null
     }
 
     private fun drawGrid(list: ImDrawList) {
@@ -674,8 +686,12 @@ class GraphEditorPanel(private val context: EditorContext) :
             val keys = keyCache[channel.id] ?: continue
             val first = keys.first().timeNanos
             val last = keys.last().timeNanos
-            val focused =
-                !anySelected || keys.any { channel.isSelected(selection, it.timeNanos) } || channel === hoveredChannel
+            val focus = focusChannel()
+            val focused = when {
+                focus != null -> channel === focus || channel === hoveredChannel
+                !anySelected -> true
+                else -> keys.any { channel.isSelected(selection, it.timeNanos) }
+            }
             val alpha = (if (channel.enabled(project)) 1f else 0.4f) * (if (focused) 1f else 0.45f)
             val color = channel.color.u32(alpha)
             val dim = channel.color.u32(alpha * 0.4f)
@@ -710,6 +726,7 @@ class GraphEditorPanel(private val context: EditorContext) :
         val project = session.project
         val selection = session.selection
         val radius = KEY_RADIUS
+        val focus = focusChannel()
         for (channel in visibleChannels) {
             val keys = keyCache[channel.id] ?: continue
             for (key in keys) {
@@ -718,7 +735,7 @@ class GraphEditorPanel(private val context: EditorContext) :
                 val value = if (mode == Mode.VALUE) key.value else channel.speedAt(project, key.timeNanos) ?: 0.0
                 val y = yOf(channel, value)
                 val selected = channel.isSelected(selection, key.timeNanos)
-                if (selected && showHandles) drawHandles(list, project, channel, key, x, y)
+                if (selected && showHandles && channel === focus) drawHandles(list, project, channel, key, x, y)
                 val fill = if (selected) EditorTheme.TEXT.u32 else channel.color.u32
                 when (key.mode) {
                     SegmentMode.HOLD -> list.addRectFilled(
@@ -886,8 +903,9 @@ class GraphEditorPanel(private val context: EditorContext) :
     private fun hitTest(session: EditorSession, mouseX: Float, mouseY: Float): Hit? {
         val project = session.project
         val selection = session.selection
-        if (showHandles) {
-            for (channel in visibleChannels) {
+        val focus = focusChannel()
+        if (showHandles && focus != null) {
+            for (channel in listOf(focus)) {
                 val keys = keyCache[channel.id] ?: continue
                 for (key in keys) {
                     if (!channel.isSelected(selection, key.timeNanos)) continue
@@ -907,7 +925,8 @@ class GraphEditorPanel(private val context: EditorContext) :
         }
         var best: Hit? = null
         var bestDistance = KEY_RADIUS * 1.8f
-        for (channel in visibleChannels) {
+        val ordered = if (focus != null) listOf(focus) + visibleChannels.filter { it !== focus } else visibleChannels
+        for (channel in ordered) {
             val keys = keyCache[channel.id] ?: continue
             for (key in keys) {
                 val x = xAt(key.timeNanos)
@@ -915,7 +934,8 @@ class GraphEditorPanel(private val context: EditorContext) :
                 val value = if (mode == Mode.VALUE) key.value else channel.speedAt(project, key.timeNanos) ?: continue
                 val y = yOf(channel, value)
                 val distance = max(abs(x - mouseX), abs(y - mouseY))
-                if (distance <= bestDistance) {
+                val margin = if (channel === focus || best == null) 0f else EditorFonts.px(2f)
+                if (distance + margin <= bestDistance) {
                     bestDistance = distance
                     best = Hit(channel, key)
                 }
@@ -1071,8 +1091,12 @@ class GraphEditorPanel(private val context: EditorContext) :
             return
         }
         val hit = hitTest(session, mouseX, mouseY)
+        if (hit != null) activeChannel = hit.channel
         if (hit == null) {
-            if (!io.keyShift && !io.keyCtrl) session.selection = Selection.NONE
+            if (!io.keyShift && !io.keyCtrl) {
+                session.selection = Selection.NONE
+                activeChannel = null
+            }
             drag = Drag.BOX
             boxX = mouseX
             boxY = mouseY
@@ -1356,7 +1380,7 @@ class GraphEditorPanel(private val context: EditorContext) :
         }
         stretchBracketAt(session, mouseX, mouseY)?.let {
             ImGui.setMouseCursor(ImGuiMouseCursor.ResizeEW)
-            Widgets.hint("Drag to stretch the selected keyframes in time")
+            TimelineTooltip.simple(Icon.TOOL_SCALE, EditorTheme.SELECTION, "Stretch", "selected keyframes in time", listOf("Drag to stretch"))
             return
         }
         val hit = hitTest(session, mouseX, mouseY)
@@ -1366,27 +1390,40 @@ class GraphEditorPanel(private val context: EditorContext) :
             if (hit.handleOut != null) {
                 val easing =
                     if (hit.handleOut) hit.key.easing else keyCache[channel.id]?.getOrNull(hit.key.index - 1)?.easing
-                Widgets.hint("${if (hit.handleOut) "Out" else "In"} handle   ${easing?.label ?: ""}\nDrag horizontally for influence, vertically for ${if (mode == Mode.VALUE) "slope" else "speed"}   Alt breaks the pair")
+                TimelineTooltip.show {
+                    TimelineTooltip.title(Icon.PATH, EditorTheme.PURPLE, if (hit.handleOut) "Out handle" else "In handle", easing?.label)
+                    TimelineTooltip.text("Horizontal changes influence, vertical the ${if (mode == Mode.VALUE) "slope" else "speed"}")
+                    TimelineTooltip.hints(listOf("Drag to adjust", "Alt breaks the pair"))
+                }
             } else {
                 val value = if (mode == Mode.VALUE) channel.format(hit.key.value) else String.format(
                     "%.2f %s/s",
                     channel.speedAt(session.project, hit.key.timeNanos) ?: 0.0,
                     channel.unit.ifEmpty { "u" })
-                Widgets.hint("${channel.label}   ${TimeFormat.clock(hit.key.timeNanos)}\n$value   ${hit.key.mode.label}   ${hit.key.easing.label}\nDrag to move   Shift constrains   Ctrl toggles selection   double-click jumps there")
+                TimelineTooltip.show {
+                    TimelineTooltip.title(Icon.KEYFRAME, channel.color, channel.label, TimeFormat.clock(hit.key.timeNanos))
+                    TimelineTooltip.chips(listOf(value, hit.key.mode.label, hit.key.easing.label))
+                    TimelineTooltip.hints(listOf("Drag to move", "Shift constrains", "Ctrl toggles selection", "Double-click to jump"))
+                }
             }
-            hoveredChannel = channel
+            pendingHovered = channel
             return
         }
         val channel = curveAt(session, mouseX, mouseY)
         if (channel != null) {
-            hoveredChannel = channel
+            pendingHovered = channel
             val nanos = nanosAt(mouseX)
             val value = if (mode == Mode.VALUE) channel.valueAt(session.project, nanos)
                 ?.let { channel.format(it) } else channel.speedAt(session.project, nanos)
                 ?.let { String.format("%.2f %s/s", it, channel.unit.ifEmpty { "u" }) }
-            Widgets.hint("${channel.label}   ${TimeFormat.clock(nanos)}   ${value ?: ""}\nDouble-click to add a keyframe here")
+            TimelineTooltip.show {
+                TimelineTooltip.title(Icon.GRAPH, channel.color, channel.label, TimeFormat.clock(nanos))
+                if (value != null) TimelineTooltip.chips(listOf(value))
+                TimelineTooltip.hints(listOf("Double-click to add a keyframe"))
+            }
         }
     }
+
 
     private fun keyboard(session: EditorSession, hovered: Boolean) {
         if (!(ImGui.isWindowFocused() || hovered) || ImGui.getIO().wantTextInput) return

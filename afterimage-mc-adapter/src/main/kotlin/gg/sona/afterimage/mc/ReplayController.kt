@@ -121,6 +121,10 @@ class ReplayController(private val platform: MinecraftPlatform, val camera: Came
             mirror.targetFace = { replay.shadow.localPlayer.target?.face ?: -1 }
             val projection =
                 RecorderProjection(replay.shadow, mirror, ProjectionOptions(predictBlocks = !replay.recordedTicks))
+            projection.recorderMissing = { id ->
+                val world = minecraft.world
+                world != null && world.getEntity(id)?.removed != false
+            }
             replay.addConsumer(projection)
             replay.addConsumer(resetWatcher)
             replay.tickHook = onWorldTick

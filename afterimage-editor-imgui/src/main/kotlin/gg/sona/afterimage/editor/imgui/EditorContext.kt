@@ -6,7 +6,6 @@ import gg.sona.afterimage.editor.EditorSession
 import gg.sona.afterimage.editor.Selection
 import gg.sona.afterimage.editor.host.EditorHost
 import gg.sona.afterimage.editor.host.VisualSettings
-import gg.sona.afterimage.editor.pose.BodyPart
 import gg.sona.afterimage.render.ExportBackend
 
 class EditorContext(
@@ -15,11 +14,11 @@ class EditorContext(
     val exports: ExportBackend?,
 ) {
     var session: EditorSession? = null
-    val timeline = TimelineView()
+    val ui = UiPreferences(host)
+    val timeline = TimelineView(ui)
     var statusLine: String = ""
     var statusUntilNanos: Long = 0L
     var fullscreenRequested: Boolean = false
-    val ui = UiPreferences(host)
 
     class Toast(val text: String, val untilNanos: Long, val color: EditorTheme.Rgb)
 
@@ -43,7 +42,6 @@ class EditorContext(
         }
     var selectedEntityId: Int? = null
 
-    var selectedBodyPart: BodyPart? = null
 
     val visuals: VisualSettings get() = host.visuals
     var clipboard: KeyframeClipboard? = null
@@ -69,7 +67,6 @@ class EditorContext(
         isRecorder: Boolean = false,
         uuid: String? = null
     ) {
-        if (id != selectedEntityId) selectedBodyPart = null
         selectedEntityId = id
         inspect = if (id == null) null else InspectTarget.Entity(id, name, isPlayer, isRecorder, uuid)
         if (id != null) session?.selection = Selection.NONE

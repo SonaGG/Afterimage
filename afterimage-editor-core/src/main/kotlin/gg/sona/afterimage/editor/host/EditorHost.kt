@@ -12,8 +12,6 @@ interface EditorHost {
 
     fun pickEntity(normalizedX: Float, normalizedY: Float): ViewportPick?
 
-    fun entityModel(entityId: Int): DoubleArray?
-
     fun project(x: Double, y: Double, z: Double): FloatArray?
 
     fun ray(normalizedX: Float, normalizedY: Float): DoubleArray?

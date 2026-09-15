@@ -14,6 +14,7 @@ import gg.sona.afterimage.index.IndexEventKind
 import gg.sona.afterimage.index.query.ReplaySearch
 import gg.sona.afterimage.index.query.SearchHit
 import gg.sona.afterimage.index.query.SearchResult
+import gg.sona.afterimage.replay.session.ReplaySession
 import imgui.ImGui
 import imgui.flag.*
 import imgui.type.ImString
@@ -26,6 +27,8 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
     private var resultFor: ReplaySearch? = null
     private var selected = -1
     private var pendingQuery: String? = null
+    private var focusInput = false
+    private var scrollTo = -1
 
     override fun content(frame: FrameContext) {
         val session = context.session
@@ -36,6 +39,7 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
         }
         context.searchRequest?.let {
             pendingQuery = it
+            focusInput = true
             context.searchRequest = null
         }
         val events = session.events
@@ -51,22 +55,16 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
             pendingQuery = null
             if (search != null) run(search)
         }
-        val submitted = Widgets.search(
-            "##query",
-            query,
-            "Search the replay: kill by:me, explosion near:me, near(me, Steve) < 5",
-            flags = ImGuiInputTextFlags.EnterReturnsTrue
-        )
+        if (focusInput) {
+            ImGui.setKeyboardFocusHere()
+            focusInput = false
+        }
+        val submitted = Widgets.search("##query", query, "Search the replay", flags = ImGuiInputTextFlags.EnterReturnsTrue)
         if (submitted && search != null) run(search)
         val current = result
         when {
-            search == null -> {
-                ImGui.dummy(0f, EditorFonts.px(4f))
-                Widgets.progress(events.progress.toFloat(), -1f, "Indexing ${(events.progress * 100).toInt()}%")
-                Widgets.smallText("Search is available once the recording is indexed.", EditorTheme.TEXT_DIM.u32)
-            }
-
-            current == null || query.get().isBlank() -> examples()
+            search == null -> indexing(events.progress)
+            current == null || query.get().isBlank() -> examples(session)
             current.error != null -> error(current)
             else -> results(session, current)
         }
@@ -77,53 +75,60 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
         selected = -1
     }
 
-    private fun examples() {
+    private fun indexing(progress: Double) {
         ImGui.dummy(0f, EditorFonts.px(6f))
-        val names = context.session?.events?.index?.playerNames.orEmpty()
-        if (names.isNotEmpty()) {
-            Widgets.header("Players")
-            var first = true
-            for (name in names.take(24)) {
-                if (!first) ImGui.sameLine(0f, EditorFonts.px(6f))
-                first = false
-                if (chip(name)) pendingQuery = "event player:$name"
-                if (ImGui.getContentRegionAvailX() < EditorFonts.px(90f)) first = true
-            }
-            ImGui.dummy(0f, EditorFonts.px(8f))
-        }
-        Widgets.header("Try")
-        for ((text, description) in ReplaySearch.EXAMPLES) {
-            ImGui.pushID(text)
-            try {
-                if (chip(text)) pendingQuery = text
-                ImGui.sameLine(0f, EditorFonts.px(10f))
-                Widgets.smallText(description, EditorTheme.TEXT_DIM.u32)
-            } finally {
-                ImGui.popID()
-            }
-        }
+        Widgets.progress(progress.toFloat(), -1f, "Indexing ${(progress * 100).toInt()}%")
+        Widgets.wrappedText("Search is available once the recording is indexed.", EditorTheme.TEXT_DIM.u32)
     }
 
-    private fun chip(text: String): Boolean {
-        val padX = EditorFonts.px(9f)
-        val height = ImGui.getFrameHeight() * 0.85f
-        val width = Widgets.textWidth(text) + padX * 2f
-        val x = ImGui.getCursorScreenPosX()
-        val y = ImGui.getCursorScreenPosY()
-        ImGui.invisibleButton("##chip-$text", width, height)
-        val hovered = ImGui.isItemHovered()
-        val list = ImGui.getWindowDrawList()
-        list.addRectFilled(
-            x,
-            y,
-            x + width,
-            y + height,
-            if (hovered) EditorTheme.CONTROL_HOVER.u32 else EditorTheme.CONTROL.u32,
-            height / 2f
+    private fun examples(session: EditorSession) {
+        ImGui.dummy(0f, EditorFonts.px(4f))
+        val names = session.events.index?.playerNames.orEmpty()
+        if (names.isNotEmpty()) {
+            Widgets.header("Players")
+            val gap = EditorFonts.px(4f)
+            var lineStart = true
+            for (name in names.take(24)) {
+                if (!lineStart) {
+                    ImGui.sameLine(0f, gap)
+                    if (ImGui.getContentRegionAvailX() < Widgets.chipWidth(name) + EditorFonts.px(2f)) ImGui.newLine()
+                }
+                lineStart = false
+                if (Widgets.chipButton("player-$name", name, tooltipText = "Everything involving $name")) pendingQuery = "event player:$name"
+            }
+        }
+        Widgets.header("Try")
+        for ((index, example) in ReplaySearch.EXAMPLES.withIndex()) {
+            val (text, description) = example
+            if (Widgets.row("example-$index", EXAMPLE_HEIGHT, false) { x, y, width, hovered ->
+                    val list = ImGui.getWindowDrawList()
+                    val inset = EditorFonts.px(8f)
+                    val top = y + (EXAMPLE_HEIGHT - ImGui.getFontSize() - EditorFonts.small.fontSize - EditorFonts.px(2f)) / 2f
+                    list.addText(
+                        EditorFonts.bodyMedium,
+                        ImGui.getFontSize(),
+                        x + inset,
+                        top,
+                        if (hovered) EditorTheme.TEXT.u32 else EditorTheme.ACCENT_TEXT.u32,
+                        Widgets.clip(text, width - inset * 2f)
+                    )
+                    EditorFonts.with(EditorFonts.small) {
+                        list.addText(
+                            x + inset,
+                            top + EditorFonts.body.fontSize + EditorFonts.px(2f),
+                            EditorTheme.TEXT_DIM.u32,
+                            Widgets.clip(description, width - inset * 2f)
+                        )
+                    }
+                    if (hovered) Widgets.cursorHand()
+                }
+            ) pendingQuery = text
+        }
+        ImGui.dummy(0f, EditorFonts.px(4f))
+        Widgets.wrappedText(
+            "Filters: by:, on:, player:, near:, within:, min:, max:, after:, before:, text:. Conditions like health(me) < 8 find spans of time.",
+            EditorTheme.TEXT_DIM.u32
         )
-        list.addText(x + padX, y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, text)
-        if (hovered) Widgets.cursorHand()
-        return ImGui.isItemClicked(ImGuiMouseButton.Left)
     }
 
     private fun error(current: SearchResult) {
@@ -139,108 +144,116 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
 
     private fun results(session: EditorSession, current: SearchResult) {
         val replay = session.replay ?: return
-        EditorTheme.pushToolbarStyle()
-        try {
-            val summary = when {
-                current.hits.isEmpty() -> "No results"
-                current.truncated -> "First ${current.hits.size} results"
-                current.hits.size == 1 -> "1 result"
-                else -> "${current.hits.size} results"
-            }
-            Widgets.smallText("$summary in ${current.elapsedMillis} ms", EditorTheme.TEXT_DIM.u32)
-            if (current.hits.isNotEmpty()) {
-                ImGui.sameLine(0f, EditorFonts.px(14f))
-                if (Widgets.ghostButton("Markers from results")) markersFromResults(session, current)
-                Widgets.tooltip("Add a marker at every result")
-                ImGui.sameLine()
-                if (Widgets.ghostButton("Clips from results")) clipsFromResults(session, current)
-                Widgets.tooltip("Add a clip around every result, ready for a montage")
-            }
-        } finally {
-            EditorTheme.popToolbarStyle()
+        ImGui.dummy(0f, EditorFonts.px(2f))
+        val summary = when {
+            current.hits.isEmpty() -> "No results"
+            current.truncated -> "First ${current.hits.size} results"
+            current.hits.size == 1 -> "1 result"
+            else -> "${current.hits.size} results"
+        }
+        Widgets.chips(listOf(summary, "${current.elapsedMillis} ms"))
+        if (current.hits.isNotEmpty()) {
+            val size = ImGui.getFrameHeight()
+            val gap = EditorFonts.px(4f)
+            ImGui.sameLine(0f, EditorFonts.px(8f))
+            Widgets.rightAlign(size * 2f + gap, spacing = 0f)
+            if (Widgets.iconButton("results-markers", Icon.MARKER, size, "Add a marker at every result", iconScale = 0.55f)) markersFromResults(session, current)
+            ImGui.sameLine(0f, gap)
+            if (Widgets.iconButton("results-clips", Icon.FILM, size, "Add a clip around every result, ready for a montage", iconScale = 0.55f)) clipsFromResults(session, current)
         }
         if (current.hits.isEmpty()) {
             Widgets.emptyState("Nothing matched", "Try a wider filter or another player", Icon.SEARCH)
             return
         }
-        val spans = current.hits.any { it.isSpan }
-        val flags = ImGuiTableFlags.RowBg or ImGuiTableFlags.ScrollY or ImGuiTableFlags.BordersInnerV
-        if (ImGui.beginTable("results", 3, flags)) {
-            ImGui.tableSetupScrollFreeze(0, 1)
-            ImGui.tableSetupColumn("Time", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(if (spans) 150f else 84f))
-            ImGui.tableSetupColumn("What", ImGuiTableColumnFlags.WidthStretch)
-            ImGui.tableSetupColumn("Detail", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(140f))
-            ImGui.tableHeadersRow()
+        ImGui.dummy(0f, EditorFonts.px(2f))
+        keyboard(replay, current)
+        if (ImGui.beginChild("results", 0f, 0f, false, ImGuiWindowFlags.None)) {
             for ((index, hit) in current.hits.withIndex()) {
-                ImGui.pushID(index)
-                try {
-                    ImGui.tableNextRow()
-                    ImGui.tableNextColumn()
-                    val isSelected = index == selected
-                    val atPlayhead = replay.positionNanos in hit.nanos..maxOf(hit.nanos, hit.endNanos)
-                    ImGui.setNextItemAllowOverlap()
-                    if (ImGui.selectable(
-                            "##row",
-                            isSelected,
-                            ImGuiSelectableFlags.SpanAllColumns or ImGuiSelectableFlags.AllowItemOverlap,
-                            0f,
-                            ROW_HEIGHT
-                        )
-                    ) {
-                        selected = index
-                        replay.seek(hit.nanos)
-                        context.status(hit.label)
-                    }
-                    if (ImGui.beginPopupContextItem("hit-menu")) {
-                        if (Menus.item("Go there")) replay.seek(hit.nanos)
-                        if (hit.hasPosition && Menus.item("Frame in scene")) context.host.camera.frame(
-                            hit.x,
-                            hit.y,
-                            hit.z,
-                            6.0
-                        )
-                        ImGui.separator()
-                        if (Menus.item("Add marker")) addMarker(session, hit)
-                        if (Menus.item("Add clip around")) addClip(session, hit)
-                        if (Menus.item("Set in/out")) session.execute(
-                            SetInOutPoints(
-                                if (hit.isSpan) hit.nanos else maxOf(replay.startNanos, hit.nanos - PRE_ROLL),
-                                if (hit.isSpan) hit.endNanos else minOf(replay.endNanos, hit.nanos + POST_ROLL)
-                            )
-                        )
-                        ImGui.endPopup()
-                    }
-                    ImGui.sameLine(0f, 0f)
-                    val timeText =
-                        if (hit.isSpan) "${TimeFormat.clock(hit.nanos)} - ${TimeFormat.clock(hit.endNanos)}" else TimeFormat.clock(
-                            hit.nanos
-                        )
-                    Widgets.tabular(
-                        timeText,
-                        EditorFonts.timecode,
-                        if (atPlayhead) EditorTheme.ACCENT_TEXT.u32 else EditorTheme.TEXT.u32
-                    )
-                    ImGui.tableNextColumn()
-                    val color = hit.kind?.let { kindColor(it) } ?: EditorTheme.TEXT_MUTED.u32
-                    ImGui.alignTextToFramePadding()
-                    Icons.draw(
-                        ImGui.getWindowDrawList(),
-                        kindIcon(hit.kind),
-                        ImGui.getCursorScreenPosX(),
-                        ImGui.getCursorScreenPosY() + (ROW_HEIGHT - EditorFonts.px(13f)) / 2f,
-                        EditorFonts.px(13f),
-                        color
-                    )
-                    ImGui.setCursorPosX(ImGui.getCursorPosX() + EditorFonts.px(19f))
-                    ImGui.textUnformatted(Widgets.clip(hit.label, ImGui.getContentRegionAvailX()))
-                    ImGui.tableNextColumn()
-                    ImGui.alignTextToFramePadding()
-                    Widgets.smallText(hit.detail, EditorTheme.TEXT_DIM.u32, clipToWidth = true)
-                } finally {
-                    ImGui.popID()
+                if (scrollTo == index) {
+                    ImGui.setScrollHereY(0.5f)
+                    scrollTo = -1
                 }
+                hitRow(session, replay.positionNanos, index, hit)
             }
-            ImGui.endTable()
+        }
+        ImGui.endChild()
+    }
+
+    private fun keyboard(replay: ReplaySession, current: SearchResult) {
+        if (!ImGui.isWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) || ImGui.getIO().wantTextInput) return
+        val count = current.hits.size
+        val step = when {
+            ImGui.isKeyPressed(ImGuiKey.DownArrow, true) -> 1
+            ImGui.isKeyPressed(ImGuiKey.UpArrow, true) -> -1
+            else -> 0
+        }
+        if (step != 0 && count > 0) {
+            selected = (selected + step).coerceIn(0, count - 1)
+            scrollTo = selected
+            replay.seek(current.hits[selected].nanos)
+        }
+        if (ImGui.isKeyPressed(ImGuiKey.Enter, false) && selected in 0 until count) replay.seek(current.hits[selected].nanos)
+    }
+
+    private fun hitRow(session: EditorSession, positionNanos: Long, index: Int, hit: SearchHit) {
+        val replay = session.replay ?: return
+        val atPlayhead = positionNanos in hit.nanos..maxOf(hit.nanos, hit.endNanos)
+        val color = hit.kind?.let { kindColor(it) } ?: EditorTheme.TEXT_MUTED.u32
+        ImGui.pushID(index)
+        try {
+            val clicked = Widgets.row("hit", ROW_HEIGHT, index == selected) { x, y, width, hovered ->
+                val list = ImGui.getWindowDrawList()
+                val inset = EditorFonts.px(8f)
+                val iconSize = EditorFonts.px(14f)
+                Icons.draw(list, kindIcon(hit.kind), x + inset, y + (ROW_HEIGHT - iconSize) / 2f, iconSize, color)
+                val timeText = if (hit.isSpan) "${TimeFormat.short(hit.nanos)} to ${TimeFormat.short(hit.endNanos)}" else TimeFormat.clock(hit.nanos)
+                val timeWidth = EditorFonts.with(EditorFonts.smallMedium) { Widgets.textWidth(timeText) }
+                EditorFonts.with(EditorFonts.smallMedium) {
+                    list.addText(
+                        x + width - inset - timeWidth,
+                        y + (ROW_HEIGHT - ImGui.getFontSize()) / 2f,
+                        if (atPlayhead) EditorTheme.SELECTION.u32 else EditorTheme.TEXT_MUTED.u32,
+                        timeText
+                    )
+                }
+                val textX = x + inset + iconSize + EditorFonts.px(8f)
+                val textWidth = width - (textX - x) - timeWidth - inset - EditorFonts.px(10f)
+                val top = y + (ROW_HEIGHT - ImGui.getFontSize() - EditorFonts.small.fontSize - EditorFonts.px(2f)) / 2f
+                list.addText(textX, top, EditorTheme.TEXT.u32, Widgets.clip(hit.label, textWidth))
+                EditorFonts.with(EditorFonts.small) {
+                    list.addText(
+                        textX,
+                        top + EditorFonts.body.fontSize + EditorFonts.px(2f),
+                        EditorTheme.TEXT_DIM.u32,
+                        Widgets.clip(hit.detail, textWidth)
+                    )
+                }
+                if (hovered) Widgets.cursorHand()
+            }
+            if (clicked) {
+                selected = index
+                replay.seek(hit.nanos)
+                context.status(hit.label)
+            }
+            if (ImGui.isItemHovered() && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left) && hit.hasPosition) {
+                context.host.camera.frame(hit.x, hit.y, hit.z, 6.0)
+            }
+            if (Widgets.beginContextPopup("hit-menu")) {
+                if (Menus.item("Go there")) replay.seek(hit.nanos)
+                if (hit.hasPosition && Menus.item("Frame in scene")) context.host.camera.frame(hit.x, hit.y, hit.z, 6.0)
+                ImGui.separator()
+                if (Menus.item("Add marker")) addMarker(session, hit)
+                if (Menus.item("Add clip around")) addClip(session, hit)
+                if (Menus.item("Set in/out")) session.execute(
+                    SetInOutPoints(
+                        if (hit.isSpan) hit.nanos else maxOf(replay.startNanos, hit.nanos - PRE_ROLL),
+                        if (hit.isSpan) hit.endNanos else minOf(replay.endNanos, hit.nanos + POST_ROLL)
+                    )
+                )
+                Widgets.endPopup()
+            }
+        } finally {
+            ImGui.popID()
         }
     }
 
@@ -326,7 +339,8 @@ class SearchPanel(private val context: EditorContext) : AbstractPanel("Search", 
     }
 
     private companion object {
-        val ROW_HEIGHT: Float get() = EditorFonts.px(24f)
+        val ROW_HEIGHT: Float get() = EditorFonts.px(38f)
+        val EXAMPLE_HEIGHT: Float get() = EditorFonts.px(36f)
         val PRE_ROLL = Nanos.ofSeconds(8)
         val POST_ROLL = Nanos.ofSeconds(4)
         const val MAX_BATCH = 200

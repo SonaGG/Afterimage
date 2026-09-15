@@ -29,6 +29,8 @@ class RecorderProjection(
     var recorderSpawned: Boolean = false
         private set
 
+    var recorderMissing: (Int) -> Boolean = { false }
+
     private var cameraPlaced = false
     private var dimension = Int.MIN_VALUE
 
@@ -41,7 +43,14 @@ class RecorderProjection(
         downstream.onReset(reason)
     }
 
-    override fun onSettled(positionNanos: Long, mode: DeliveryMode) = downstream.onSettled(positionNanos, mode)
+    override fun onSettled(positionNanos: Long, mode: DeliveryMode) {
+        val player = shadow.localPlayer
+        if (recorderSpawned && player.deadAtNanos == Long.MIN_VALUE && player.health > 0f && recorderMissing(recorderEntityId)) {
+            recorderSpawned = false
+            spawnRecorder(CapturedPacket(PacketDirection.CLIENTBOUND, positionNanos, ClientboundPlay.PLAYER_POSITION_AND_LOOK, EMPTY_PAYLOAD), mode)
+        }
+        downstream.onSettled(positionNanos, mode)
+    }
 
     override fun onPacket(packet: CapturedPacket, mode: DeliveryMode) {
         if (packet.direction == PacketDirection.SERVERBOUND) outbound(packet, mode) else inbound(packet, mode)
@@ -616,6 +625,7 @@ class RecorderProjection(
         val FACE_Y = intArrayOf(-1, 1, 0, 0, 0, 0)
         val FACE_Z = intArrayOf(0, 0, -1, 1, 0, 0)
         const val BLOCK_BREAK_EFFECT = 2001
+        val EMPTY_PAYLOAD = ByteArray(0)
         const val MAX_PENDING_DIGS = 64
         const val MIN_MIRRORED_HEALTH = 0.01f
         const val PLAYER_SLOTS_IN_CONTAINER = 36

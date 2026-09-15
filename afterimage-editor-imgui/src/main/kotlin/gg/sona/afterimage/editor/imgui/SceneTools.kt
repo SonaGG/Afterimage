@@ -77,7 +77,6 @@ class SceneTools(private val context: EditorContext) {
     private var pivot = Vector3d()
     private var axes: Array<Vector3d> = arrayOf(Vector3d(GizmoDraw.X), Vector3d(GizmoDraw.Y), Vector3d(GizmoDraw.Z))
     private var overlayTags = ArrayList<Triple<Float, Float, String>>()
-    private val poseTool = PoseSceneTool(context)
 
     fun draw(rect: ViewRect, frame: FrameContext) {
         consumedClick = false
@@ -105,19 +104,7 @@ class SceneTools(private val context: EditorContext) {
         overlay.pushClipRect(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height, true)
         try {
             val gizmosOn = context.ui.sceneGizmos
-            val posing = gizmosOn && poseTool.draw(
-                rect,
-                session,
-                camera,
-                draw,
-                inside,
-                mouseX,
-                mouseY,
-                { project(rect, it) },
-                { ray(rect, mouseX, mouseY) },
-                overlayTags
-            )
-            val free = inside && !posing
+            val free = inside
             if (context.host.camera.settings.showPath && gizmosOn) {
                 collectHandles(rect, session, camera)
                 path(session, draw)
@@ -140,7 +127,6 @@ class SceneTools(private val context: EditorContext) {
                 hoverPathPoint = null
             }
             if (gizmosOn) entities(rect, session, draw, free, mouseX, mouseY, frame) else hoveredEntity = null
-            if (poseTool.consumedClick) consumedClick = true
             box?.let {
                 overlay.addRectFilled(it.startX, it.startY, mouseX, mouseY, EditorTheme.TEXT.u32(0.08f))
                 overlay.addRect(it.startX, it.startY, mouseX, mouseY, EditorTheme.TEXT.u32(0.6f), 0f, 0, 1f)
@@ -154,7 +140,7 @@ class SceneTools(private val context: EditorContext) {
         preview(rect, session)
         contextMenu(session)
         keyboard(session, inside)
-        if (inside && drag == null && (hoverPart != Part.NONE || hoverPathTime != null || hoveredEntity != null || poseTool.active)) ImGui.setMouseCursor(
+        if (inside && drag == null && (hoverPart != Part.NONE || hoverPathTime != null || hoveredEntity != null)) ImGui.setMouseCursor(
             ImGuiMouseCursor.Hand
         )
     }
@@ -1205,7 +1191,7 @@ class SceneTools(private val context: EditorContext) {
             session.execute(RemoveKeyframes(session.selection.keyframeTimes))
             session.selection = Selection.NONE
         }
-        if (ImGui.isKeyPressed(ImGuiKey.Escape, false) && drag == null && !poseTool.consumedEscape) {
+        if (ImGui.isKeyPressed(ImGuiKey.Escape, false) && drag == null) {
             if (!session.selection.isEmpty) session.selection = Selection.NONE
             else if (context.selectedEntityId != null) context.selectEntity(null)
         }

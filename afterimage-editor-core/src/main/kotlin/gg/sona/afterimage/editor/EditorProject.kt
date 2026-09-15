@@ -7,8 +7,6 @@ import gg.sona.afterimage.camera.track.interpolator.DoubleInterpolator
 import gg.sona.afterimage.camera.track.interpolator.FovInterpolator
 import gg.sona.afterimage.clip.Clip
 import gg.sona.afterimage.editor.look.LookSettings
-import gg.sona.afterimage.editor.pose.BodyPose
-import gg.sona.afterimage.editor.pose.PoseInterpolator
 import java.nio.file.Path
 import java.util.*
 
@@ -52,7 +50,6 @@ class EditorProject(
     val packs = Track(PackStateInterpolator, "packs")
     val look = LookSettings()
 
-    val poses = LinkedHashMap<Int, Track<BodyPose>>()
     val clips = ArrayList<Clip>()
     val markers = ArrayList<TimelineMarker>()
     val moments = ArrayList<Moment>()
@@ -75,7 +72,6 @@ class EditorProject(
         LaneState(LaneKind.PLAYERS, "Players"),
         LaneState(LaneKind.WORLD, "World"),
         LaneState(LaneKind.MOMENTS, "Moments"),
-        LaneState(LaneKind.POSE, "Poses"),
         LaneState(LaneKind.FOCUS, "Focus"),
         LaneState(LaneKind.TEXTURE_PACK, "Texture pack"),
     )
@@ -131,16 +127,6 @@ class EditorProject(
     fun packAt(timeNanos: Long): PackState? {
         if (!laneEnabled(LaneKind.TEXTURE_PACK) || packs.isEmpty || timeNanos < packs.firstNanos) return null
         return packs.valueAt(timeNanos)
-    }
-
-    fun poseTrack(entityId: Int): Track<BodyPose> =
-        poses.getOrPut(entityId) { Track(PoseInterpolator, "pose-$entityId") }
-
-    fun poseAt(entityId: Int, timeNanos: Long): BodyPose? {
-        if (!laneEnabled(LaneKind.POSE)) return null
-        val track = poses[entityId] ?: return null
-        if (track.isEmpty || timeNanos < track.firstNanos) return null
-        return track.valueAt(timeNanos)?.takeIf { !it.isEmpty }
     }
 
     fun replaceLane(kind: LaneKind, state: LaneState) {

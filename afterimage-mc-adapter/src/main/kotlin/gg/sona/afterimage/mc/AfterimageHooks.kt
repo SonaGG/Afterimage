@@ -12,7 +12,6 @@ import net.minecraft.client.entity.living.player.LocalClientPlayerEntity
 import net.minecraft.client.gui.GameGui
 import net.minecraft.client.gui.screen.Screen
 import net.minecraft.client.gui.screen.inventory.menu.InventoryMenuScreen
-import net.minecraft.client.render.model.entity.HumanoidModel
 import net.minecraft.client.render.pipeline.RenderTarget
 import net.minecraft.client.render.world.ChunkRenderDispatcher
 import net.minecraft.client.render.world.RenderChunk
@@ -221,14 +220,6 @@ object AfterimageHooks {
     @JvmStatic
     fun onWorldRendered(tickDelta: Float) =
         guarded("world overlays") { if (!it.preview.rendering) it.gizmoRenderer.render(tickDelta) }
-
-    @JvmStatic
-    fun restorePose(model: HumanoidModel) {
-        runtime?.poseDriver?.restore(model)
-    }
-
-    @JvmStatic
-    fun applyPose(model: HumanoidModel, entity: Entity) = guarded("pose") { it.poseDriver.apply(model, entity) }
 
     @JvmStatic
     fun onWorldPassComplete(tickDelta: Float, finishNanos: Long) =
@@ -459,6 +450,13 @@ object AfterimageHooks {
                     }
                 }
             }
+        }
+        for (entity in world.entities) {
+            if (entity.removed || !entity.inChunk || entity.chunkX != next.chunkX || entity.chunkZ != next.chunkZ) continue
+            if (floor(entity.x / 16.0).toInt() != next.chunkX || floor(entity.z / 16.0).toInt() != next.chunkZ) continue
+            if (next.entities.any { it.contains(entity) }) continue
+            next.addEntity(entity)
+            migrated++
         }
         if (migrated > 0) logger.debug(
             "Afterimage migrated {} entities into loaded chunk {},{}",

@@ -32,7 +32,7 @@ class HierarchyPanel(private val context: EditorContext) :
 
     private val filter = ImString("", 64)
     private val momentRename = ImString("", 64)
-    private val expanded = HashSet<String>().apply { addAll(listOf("path", "players", "entities", "clips", "markers")) }
+    private val toggled = context.ui.set("editor.hierarchy.toggled")
     private var rows: List<Row> = emptyList()
     private var lastRefreshNanos = 0L
     private var contextKeyframe: Long? = null
@@ -95,7 +95,7 @@ class HierarchyPanel(private val context: EditorContext) :
             TimeFormat.clock(it.timeNanos).contains(query) || "keyframe".contains(query)
         }
         if (query.isNotEmpty() && matching.isEmpty() && !"camera path".contains(query)) return
-        val open = "path" in expanded || query.isNotEmpty()
+        val open = isOpen("path") || query.isNotEmpty()
         val laneSelected = context.inspect == InspectTarget.Lane(LaneKind.CAMERA) && session.selection.isEmpty
         val clicked = node(
             "path",
@@ -183,11 +183,10 @@ class HierarchyPanel(private val context: EditorContext) :
         )
         lanes += Triple(LaneKind.VIEW, "View", session.project.views.keyframes.size)
         lanes += Triple(LaneKind.TEXTURE_PACK, "Texture pack", session.project.packs.keyframes.size)
-        lanes += Triple(LaneKind.POSE, "Poses", session.project.poses.values.sumOf { it.keyframes.size })
         val visible = lanes.filter { (kind, label, count) -> count > 0 || kind in context.timeline.shownLanes }
             .filter { query.isEmpty() || it.second.lowercase().contains(query) }
         if (visible.isEmpty()) return
-        val open = "tracks" in expanded || query.isNotEmpty()
+        val open = isOpen("tracks") || query.isNotEmpty()
         if (node(
                 "tracks",
                 0,
@@ -235,7 +234,7 @@ class HierarchyPanel(private val context: EditorContext) :
         val clips = session.project.clips.sortedBy { it.startNanos }
         val matching = clips.filter { query.isEmpty() || it.title.lowercase().contains(query) }
         if (query.isNotEmpty() && matching.isEmpty()) return
-        val open = "clips" in expanded || query.isNotEmpty()
+        val open = isOpen("clips") || query.isNotEmpty()
         if (node(
                 "clips",
                 0,
@@ -290,7 +289,7 @@ class HierarchyPanel(private val context: EditorContext) :
         val markers = session.project.markers.sortedBy { it.nanos }
         val matching = markers.filter { query.isEmpty() || it.label.lowercase().contains(query) }
         if (query.isNotEmpty() && matching.isEmpty()) return
-        val open = "markers" in expanded || query.isNotEmpty()
+        val open = isOpen("markers") || query.isNotEmpty()
         if (node(
                 "markers",
                 0,
@@ -361,7 +360,7 @@ class HierarchyPanel(private val context: EditorContext) :
         val matchingOthers =
             others.filter { query.isEmpty() || it.name.lowercase().contains(query) || it.kind.contains(query) }
         if (matchingPlayers.isNotEmpty() || query.isEmpty()) {
-            val open = "players" in expanded || query.isNotEmpty()
+            val open = isOpen("players") || query.isNotEmpty()
             if (node(
                     "players",
                     0,
@@ -381,7 +380,7 @@ class HierarchyPanel(private val context: EditorContext) :
             )
         }
         if (matchingOthers.isNotEmpty() || query.isEmpty()) {
-            val open = "entities" in expanded || query.isNotEmpty()
+            val open = isOpen("entities") || query.isNotEmpty()
             if (node(
                     "entities",
                     0,
@@ -412,7 +411,7 @@ class HierarchyPanel(private val context: EditorContext) :
             query.isEmpty() || it.label.lowercase().contains(query) || it.kind.label.lowercase().contains(query)
         }
         if (query.isNotEmpty() && matching.isEmpty()) return
-        val open = "moments" in expanded || query.isNotEmpty()
+        val open = isOpen("moments") || query.isNotEmpty()
         val kept = session.project.moments.size
         if (node(
                 "moments",
@@ -504,8 +503,10 @@ class HierarchyPanel(private val context: EditorContext) :
         EntityRef(row.id, row.name, row.isPlayer, row.isRecorder, row.uuid, row.x, row.y, row.z)
 
     private fun toggle(key: String) {
-        if (!expanded.remove(key)) expanded.add(key)
+        if (!toggled.remove(key)) toggled.add(key)
     }
+
+    private fun isOpen(key: String): Boolean = (key in OPEN_BY_DEFAULT) != (key in toggled)
 
     private fun node(
         id: String,
@@ -674,6 +675,7 @@ class HierarchyPanel(private val context: EditorContext) :
             MarkerKind.CAMERA to Icon.CAMERA,
         )
         const val MAX_ENTITIES = 150
+        val OPEN_BY_DEFAULT = setOf("path", "players", "entities", "clips", "markers")
         val REFRESH_NANOS = 500_000_000L
         val LANE_ICONS = mapOf(
             LaneKind.SPEED to Icon.GAUGE,
@@ -683,7 +685,6 @@ class HierarchyPanel(private val context: EditorContext) :
             LaneKind.SHAKE_FREQUENCY to Icon.WAVE,
             LaneKind.VIEW to Icon.EYE,
             LaneKind.FREEZE to Icon.SNOWFLAKE,
-            LaneKind.POSE to Icon.PERSON,
             LaneKind.FOCUS to Icon.FOCUS,
             LaneKind.TEXTURE_PACK to Icon.PACKAGE,
         )

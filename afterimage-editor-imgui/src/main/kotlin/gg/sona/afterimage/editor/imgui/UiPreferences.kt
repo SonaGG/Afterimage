@@ -6,6 +6,7 @@ import gg.sona.afterimage.editor.host.EditorHost
 class UiPreferences(private val host: EditorHost) {
 
     private val cache = HashMap<String, Boolean>()
+    private val sets = HashMap<String, PersistedSet>()
     private var laneOrderCache: List<LaneKind>? = null
 
     var viewportOverlay: Boolean
@@ -69,6 +70,10 @@ class UiPreferences(private val host: EditorHost) {
         get() = read("library.list", false)
         set(value) = write("library.list", value)
 
+    var showAllPlayers: Boolean
+        get() = read("editor.timeline.allPlayers", false)
+        set(value) = write("editor.timeline.allPlayers", value)
+
     var libraryThumbSize: Float
         get() = thumbSizeCache ?: (host.preference("library.thumbSize")?.toFloatOrNull() ?: 232f).also {
             thumbSizeCache = it
@@ -87,6 +92,14 @@ class UiPreferences(private val host: EditorHost) {
             host.setPreference("editor.timeline.laneOrder", value.joinToString(",") { it.name })
         }
 
+    val shownLanes: PersistedSet get() = set("editor.timeline.shownLanes")
+
+    val hiddenWorldRows: PersistedSet get() = set("editor.timeline.hiddenWorldRows")
+
+    val collapsedSections: PersistedSet get() = set("editor.inspector.collapsed")
+
+    fun set(key: String): PersistedSet = sets.getOrPut(key) { PersistedSet(key) }
+
     private fun readLaneOrder(): List<LaneKind> {
         val saved = host.preference("editor.timeline.laneOrder")?.split(",")
             ?.mapNotNull { name -> LaneKind.entries.firstOrNull { it.name == name } } ?: emptyList()
@@ -99,5 +112,39 @@ class UiPreferences(private val host: EditorHost) {
     private fun write(key: String, value: Boolean) {
         cache[key] = value
         host.setPreference(key, value.toString())
+    }
+
+    inner class PersistedSet(private val key: String) : AbstractMutableSet<String>() {
+        private val items: MutableSet<String> =
+            host.preference(key)?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toMutableSet()
+                ?: LinkedHashSet()
+
+        override val size: Int get() = items.size
+
+        override fun contains(element: String): Boolean = items.contains(element)
+
+        override fun add(element: String): Boolean = items.add(element).also { if (it) save() }
+
+        override fun remove(element: String): Boolean = items.remove(element).also { if (it) save() }
+
+        override fun iterator(): MutableIterator<String> = object : MutableIterator<String> {
+            private val inner = items.iterator()
+            override fun hasNext(): Boolean = inner.hasNext()
+            override fun next(): String = inner.next()
+            override fun remove() {
+                inner.remove()
+                save()
+            }
+        }
+
+        fun toggle(element: String, present: Boolean): Boolean = if (present) add(element) else remove(element)
+
+        operator fun contains(element: Enum<*>): Boolean = contains(element.name)
+
+        fun add(element: Enum<*>): Boolean = add(element.name)
+
+        fun remove(element: Enum<*>): Boolean = remove(element.name)
+
+        private fun save() = host.setPreference(key, items.joinToString(","))
     }
 }

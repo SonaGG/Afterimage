@@ -46,7 +46,7 @@ object Widgets {
 
     fun beginPopup(id: String): Boolean {
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, EditorFonts.px(10f), EditorFonts.px(8f))
-        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(6f), EditorFonts.px(6f))
+        Menus.pushMenuStyle()
         val open = ImGui.beginPopup(id)
         if (!open) ImGui.popStyleVar(2)
         return open
@@ -54,7 +54,7 @@ object Widgets {
 
     fun beginContextPopup(id: String): Boolean {
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, EditorFonts.px(10f), EditorFonts.px(8f))
-        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, EditorFonts.px(6f), EditorFonts.px(6f))
+        Menus.pushMenuStyle()
         val open = ImGui.beginPopupContextItem(id)
         if (!open) ImGui.popStyleVar(2)
         return open
@@ -363,6 +363,93 @@ object Widgets {
             ImGui.popStyleColor()
         }
         ImGui.dummy(0f, EditorFonts.px(2f))
+    }
+
+    fun foldout(
+        title: String,
+        key: String,
+        toggled: UiPreferences.PersistedSet,
+        defaultOpen: Boolean = true,
+        trailing: String? = null,
+    ): Boolean {
+        val open = defaultOpen != (key in toggled)
+        val x = ImGui.getCursorScreenPosX()
+        val width = ImGui.getContentRegionAvailX()
+        val list = ImGui.getWindowDrawList()
+        if (ImGui.getCursorPosY() > ImGui.getStyle().windowPaddingY + EditorFonts.px(4f)) {
+            ImGui.dummy(0f, EditorFonts.px(4f))
+            val y = ImGui.getCursorScreenPosY()
+            list.addLine(x, y, x + width, y, EditorTheme.SEPARATOR.u32, 1f)
+            ImGui.dummy(0f, EditorFonts.px(2f))
+        }
+        val height = EditorFonts.px(26f)
+        val y = ImGui.getCursorScreenPosY()
+        val pressed = ImGui.invisibleButton("##foldout-$key", maxOf(1f, width), height)
+        val hovered = ImGui.isItemHovered()
+        if (hovered) {
+            list.addRectFilled(x, y, x + width, y + height, EditorTheme.TEXT.u32(0.04f), EditorFonts.px(5f))
+            cursorHand()
+        }
+        val chevron = EditorFonts.px(11f)
+        Icons.draw(
+            list,
+            if (open) Icon.CHEVRON_DOWN else Icon.CHEVRON_RIGHT,
+            x + EditorFonts.px(3f),
+            y + (height - chevron) / 2f,
+            chevron,
+            EditorTheme.TEXT_MUTED.u32
+        )
+        EditorFonts.with(EditorFonts.smallMedium) {
+            list.addText(x + EditorFonts.px(19f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, title)
+        }
+        if (trailing != null) EditorFonts.with(EditorFonts.small) {
+            val trailingWidth = textWidth(trailing)
+            list.addText(
+                x + width - trailingWidth - EditorFonts.px(4f),
+                y + (height - ImGui.getFontSize()) / 2f,
+                EditorTheme.TEXT_DIM.u32,
+                trailing
+            )
+        }
+        if (pressed) toggled.toggle(key, key !in toggled)
+        if (open) ImGui.dummy(0f, EditorFonts.px(2f))
+        return open
+    }
+
+    fun chipButton(
+        id: String,
+        text: String,
+        selected: Boolean = false,
+        lineHeight: Float = ImGui.getFrameHeight(),
+        tooltipText: String? = null,
+    ): Boolean {
+        val list = ImGui.getWindowDrawList()
+        return EditorFonts.with(EditorFonts.smallMedium) {
+            ImGui.calcTextSize(measure, text)
+            val padX = EditorFonts.px(8f)
+            val height = measure.y + EditorFonts.px(7f)
+            val width = measure.x + padX * 2f
+            val x = ImGui.getCursorScreenPosX()
+            val top = ImGui.getCursorScreenPosY()
+            val y = top + maxOf(0f, (lineHeight - height) / 2f)
+            ImGui.setCursorScreenPos(x, y)
+            val pressed = ImGui.invisibleButton(id, width, height)
+            val hovered = ImGui.isItemHovered()
+            val background = when {
+                selected -> EditorTheme.CONTROL_ACTIVE.u32
+                hovered -> EditorTheme.CONTROL_HOVER.u32
+                else -> EditorTheme.CONTROL.u32
+            }
+            list.addRectFilled(x, y, x + width, y + height, background, height / 2f)
+            list.addText(x + padX, y + EditorFonts.px(3.5f), if (selected) EditorTheme.TEXT.u32 else EditorTheme.TEXT_MUTED.u32, text)
+            if (hovered) {
+                cursorHand()
+                if (tooltipText != null) hint(tooltipText)
+            }
+            ImGui.setCursorScreenPos(x, top)
+            ImGui.dummy(width, maxOf(height, lineHeight))
+            pressed
+        }
     }
 
     fun accentButton(label: String, width: Float = 0f, height: Float = 0f): Boolean =
@@ -769,7 +856,10 @@ object Widgets {
             return
         }
         for ((index, part) in parts.withIndex()) {
-            if (index > 0) ImGui.sameLine(0f, gap)
+            if (index > 0) {
+                ImGui.sameLine(0f, gap)
+                if (ImGui.getContentRegionAvailX() < chipWidth(part)) ImGui.newLine()
+            }
             chip(part, color, background, lineHeight)
         }
     }

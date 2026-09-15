@@ -32,7 +32,6 @@ class EditorWorkspace(val context: EditorContext) {
         VisualsPanel(context),
         LookPanel(context),
         RenderFilterPanel(context),
-        KeybindsPanel(context),
         SettingsPanel(context),
         SequencePanel(context),
         ScoreboardPanel(context),
@@ -56,9 +55,8 @@ class EditorWorkspace(val context: EditorContext) {
     private val toolbar = Toolbar(context, this)
     private val tools = SceneTools(context)
     private val palette = CommandPalette()
-    private val shortcutsOpen = ImBoolean(false)
+    private val shortcuts = ShortcutsDialog(context)
     private val aboutOpen = ImBoolean(false)
-    private val shortcutsDialog = Dialog("Keyboard Shortcuts", Icon.COMMAND, 780f, 580f)
     private val about = AboutDialog(context)
     private var autosaveVersion = -1L
     private var recordingPath = false
@@ -96,7 +94,7 @@ class EditorWorkspace(val context: EditorContext) {
             context.host.gizmos.clear()
             library.draw(frame, STATUS_HEIGHT)
             statusBar(frame)
-            shortcutsWindow()
+            shortcuts.draw()
             about.draw(aboutOpen)
             palette.draw(frame, paletteCommands())
             if (ImGui.getIO().keyCtrl && ImGui.isKeyPressed(ImGuiKey.P, false)) palette.toggle()
@@ -150,7 +148,7 @@ class EditorWorkspace(val context: EditorContext) {
         sceneInteraction()
         if (context.ui.viewportOverlay) sceneOverlay()
         statusBar(frame)
-        shortcutsWindow()
+        shortcuts.draw()
         about.draw(aboutOpen)
         palette.draw(frame, paletteCommands())
         shortcuts()
@@ -159,13 +157,13 @@ class EditorWorkspace(val context: EditorContext) {
 
     fun isPanelOpen(title: String): Boolean = panels.firstOrNull { it.title == title }?.open?.get() == true
 
-    val dialogOpen: Boolean get() = panels.any { it.dockArea == DockArea.FLOATING && it.open.get() } || shortcutsOpen.get() || aboutOpen.get()
+    val dialogOpen: Boolean get() = panels.any { it.dockArea == DockArea.FLOATING && it.open.get() } || shortcuts.open.get() || aboutOpen.get()
 
     val consumesEscape: Boolean get() = dialogOpen || palette.open || context.session != null
 
     private fun closeDialogs() {
         for (panel in panels) if (panel.dockArea == DockArea.FLOATING) panel.open.set(false)
-        shortcutsOpen.set(false)
+        shortcuts.open.set(false)
         aboutOpen.set(false)
     }
 
@@ -555,6 +553,7 @@ class EditorWorkspace(val context: EditorContext) {
         val open = ImGui.beginMainMenuBar()
         ImGui.popStyleVar()
         if (!open) return
+        Menus.pushMenuStyle()
         val session = context.session
         val replay = session?.replay
         if (ImGui.beginMenu("File")) {
@@ -830,7 +829,7 @@ class EditorWorkspace(val context: EditorContext) {
         if (ImGui.beginMenu("Help")) {
             if (Menus.item("Keyboard Shortcuts", "F1")) {
                 closeDialogs()
-                shortcutsOpen.set(true)
+                shortcuts.show()
             }
             if (Menus.item("Settings")) context.openPanel("Settings")
             ImGui.separator()
@@ -840,53 +839,8 @@ class EditorWorkspace(val context: EditorContext) {
             }
             ImGui.endMenu()
         }
+        Menus.popMenuStyle()
         ImGui.endMainMenuBar()
-    }
-
-    private fun shortcutsWindow() {
-        shortcutsDialog.draw(shortcutsOpen, {
-            val groups = ArrayList<MutableList<Pair<String, String>>>()
-            for (entry in SHORTCUTS) {
-                if (entry.first.isEmpty()) groups += mutableListOf(entry) else groups.last() += entry
-            }
-            val column = (ImGui.getContentRegionAvailX() - EditorFonts.px(24f)) / 2f
-            val split = (groups.size + 1) / 2
-            for (half in 0 until 2) {
-                if (half == 1) ImGui.sameLine(0f, EditorFonts.px(24f))
-                ImGui.beginGroup()
-                for (group in groups.drop(half * split).take(split)) {
-                    Widgets.header(group.first().second)
-                    if (ImGui.beginTable(
-                            "shortcuts-${group.first().second}",
-                            2,
-                            ImGuiTableFlags.SizingFixedFit,
-                            column,
-                            0f
-                        )
-                    ) {
-                        ImGui.tableSetupColumn("keys", ImGuiTableColumnFlags.WidthFixed, EditorFonts.px(168f))
-                        ImGui.tableSetupColumn(
-                            "action",
-                            ImGuiTableColumnFlags.WidthFixed,
-                            column - EditorFonts.px(168f)
-                        )
-                        for ((keys, action) in group.drop(1)) {
-                            ImGui.tableNextRow()
-                            ImGui.tableNextColumn()
-                            KeyCaps.mixed(keys, color = EditorTheme.TEXT.u32, textColor = EditorTheme.TEXT_MUTED.u32, lineHeight = KeyCaps.height())
-                            ImGui.tableNextColumn()
-                            ImGui.setCursorPosY(ImGui.getCursorPosY() + (KeyCaps.height() - ImGui.getTextLineHeight()) / 2f)
-                            ImGui.pushTextWrapPos(0f)
-                            Widgets.mutedText(action)
-                            ImGui.popTextWrapPos()
-                        }
-                        ImGui.endTable()
-                    }
-                    ImGui.dummy(0f, EditorFonts.px(4f))
-                }
-                ImGui.endGroup()
-            }
-        })
     }
 
     private fun statusBar(frame: FrameContext) {
@@ -1000,15 +954,6 @@ class EditorWorkspace(val context: EditorContext) {
                 SceneTool.SCALE -> if (selected == 1) "Scale    drag the centre cube to change FOV" else "Scale    drag the centre cube or an axis cube"
                 SceneTool.VIEW -> "View    click keyframes to select    drag to box select"
             }
-
-            context.selectedEntityId?.let {
-                PoseTools.poseable(
-                    session,
-                    it
-                )
-            } == true && context.tool == SceneTool.ROTATE ->
-                if (context.selectedBodyPart == null) "Pose    click a limb to attach the gizmo    Esc deselects"
-                else "Pose ${context.selectedBodyPart!!.label.lowercase()}    drag a ring    Ctrl snaps to 15 degrees    keys at the playhead"
 
             else -> ""
         }
@@ -1192,7 +1137,7 @@ class EditorWorkspace(val context: EditorContext) {
         if (io.wantTextInput) return
         if (ImGui.isKeyPressed(ImGuiKey.F1, false)) {
             closeDialogs()
-            shortcutsOpen.set(true)
+            shortcuts.show()
         }
         if (ImGui.isKeyPressed(ImGuiKey.F2, false)) exportPanel()?.screenshotNow()
         if (io.keyCtrl && ImGui.isKeyPressed(ImGuiKey.E, false)) exportPanel()?.startNow()
@@ -1585,7 +1530,7 @@ class EditorWorkspace(val context: EditorContext) {
         add("Reset layout", "View", Icon.REFRESH) { resetLayoutRequested = true }
         add("Keyboard shortcuts", "Help", Icon.COMMAND, "F1") {
             closeDialogs()
-            shortcutsOpen.set(true)
+            shortcuts.show()
         }
         add("About Afterimage", "Help", Icon.INFO) {
             closeDialogs()
@@ -1736,62 +1681,5 @@ class EditorWorkspace(val context: EditorContext) {
         val STATUS_HEIGHT: Float get() = EditorFonts.px(24f)
         val TOOLBAR_HEIGHT: Float get() = EditorFonts.px(40f)
         val RTC_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d  HH:mm:ss")
-        val SHORTCUTS = listOf(
-            "" to "Tools",
-            "Q  W  E  R" to "View, Move, Rotate and Scale tools",
-            "X" to "Toggle local and world axes",
-            "Ctrl while dragging" to "Snap: half blocks, 15 degrees, tenths",
-            "Click keyframe" to "Select   Shift adds   double-click jumps there",
-            "Drag on empty scene" to "Box select keyframes",
-            "Double-click the path" to "Insert a keyframe there",
-            "Ctrl+A  /  Delete" to "Select all keyframes  /  delete selected",
-            "F" to "Frame the hovered entity, selected keyframes or selected entity",
-            "H" to "Toggle the camera path and gizmos",
-            "Tab" to "Fullscreen scene   Esc exits",
-            "" to "Scene camera",
-            "Right drag" to "Look around   WASD flies   Space up   Shift down",
-            "Wheel" to "Dolly toward the cursor   while flying: fly speed",
-            "Alt+Left drag" to "Orbit around the point under the cursor",
-            "Middle drag" to "Pan",
-            "Alt+Right drag" to "Dolly in and out",
-            "Ctrl  /  Alt while flying" to "Fast  /  slow",
-            "" to "Playback",
-            "Space" to "Play or pause   Shift plays from the in point",
-            "J  K  L" to "Shuttle reverse, pause, forward   press again to double",
-            "Left  /  Right" to "Step one frame   Shift steps one tick",
-            "Home  /  End" to "Jump to start or end",
-            ",  /  ." to "Previous or next keyframe   Shift: marker   Alt: event",
-            "I  /  O" to "Set in or out point",
-            "" to "Editing",
-            "Ctrl+K" to "Add a camera keyframe from the current view",
-            "Ctrl+Shift+K" to "Add a keyframe two seconds after the last one",
-            "Ctrl+Shift+R" to "Record your flight as keyframes while playing",
-            "Auto key (toolbar)" to "Moving the camera on a paused frame sets a keyframe there",
-            "F9" to "Easy ease the selected keyframes   Shift: ease in   Ctrl+Shift: ease out",
-            "Ctrl+G" to "Graph Editor: curves, tangent handles and speed graph",
-            "Ctrl+D" to "Duplicate the selected keyframe at the playhead",
-            "Ctrl+C  X  V" to "Copy, cut and paste keyframes at the playhead",
-            "M" to "Add a marker   1 to 8 recolour selected markers",
-            "Ctrl+Z  /  Ctrl+Y" to "Undo and redo",
-            "Ctrl+S" to "Save the project",
-            "Ctrl+E  /  F2" to "Start an export  /  screenshot",
-            "Ctrl+P" to "Command palette",
-            "" to "Timeline",
-            "Wheel" to "Zoom around the cursor   Shift pans   middle drag pans",
-            "Drag the ruler" to "Scrub",
-            "Alt+drag keyframe" to "Duplicate",
-            "Shift while dragging" to "Disable snapping",
-            "Z  /  Shift+Z" to "Zoom to the in and out range  /  fit everything",
-            "Shift+F" to "Follow the playhead",
-            "" to "Graph Editor",
-            "Drag a key" to "Move in time and value   Shift locks one axis   Ctrl rounds values",
-            "Drag a handle" to "Horizontal: influence   vertical: slope or speed   Alt edits one side only",
-            "Drag the brackets" to "Stretch the selected keyframes in time",
-            "Double-click a curve" to "Insert a keyframe on that channel",
-            "Wheel  /  Shift+wheel" to "Zoom time   /  pan   Ctrl+wheel scales values when not normalized",
-            "Middle drag  /  Alt+drag" to "Pan the graph",
-            "Alt+click a channel" to "Solo it   Ctrl+click selects all its keyframes",
-            "F" to "Fit the selection or everything",
-        )
     }
 }

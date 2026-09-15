@@ -67,10 +67,15 @@ object KeyCaps {
 
     fun hasKeys(text: String): Boolean = pieces(text).any { it.key }
 
-    fun width(text: String, font: ImFont = EditorFonts.smallMedium, padY: Float = PAD_Y): Float =
-        maxOf(EditorFonts.with(font) { Widgets.textWidth(text) } + PAD_X * 2f, height(font, padY))
+    fun width(text: String, font: ImFont = EditorFonts.smallMedium, height: Float = height(font)): Float =
+        maxOf(EditorFonts.with(font) { Widgets.textWidth(text) } + PAD_X * 2f, height)
 
-    fun height(font: ImFont = EditorFonts.smallMedium, padY: Float = PAD_Y): Float = font.fontSize + padY * 2f
+    fun height(font: ImFont = EditorFonts.smallMedium): Float = font.fontSize + PAD_Y * 2f
+
+    fun fits(rowHeight: Float, font: ImFont = EditorFonts.smallMedium): Float =
+        (rowHeight - ROW_INSET * 2f).coerceIn(minOf(font.fontSize, rowHeight), height(font))
+
+    private fun textTop(font: ImFont, height: Float): Float = height / 2f - (font.ascent - font.fontSize * CAP_CENTER)
 
     fun draw(
         list: ImDrawList,
@@ -79,28 +84,55 @@ object KeyCaps {
         text: String,
         font: ImFont = EditorFonts.smallMedium,
         color: Int = EditorTheme.TEXT_MUTED.u32,
-        padY: Float = PAD_Y,
+        height: Float = height(font),
+        fill: Int = EditorTheme.CONTROL.u32,
     ): Float {
-        val width = width(text, font, padY)
-        val height = height(font, padY)
-        val rounding = EditorFonts.px(4f)
-        list.addRectFilled(x, y, x + width, y + height, EditorTheme.CONTROL.u32, rounding)
+        val width = width(text, font, height)
+        val rounding = minOf(EditorFonts.px(4f), height / 2f)
+        list.addRectFilled(x, y + 1f, x + width, y + height + 1f, EditorTheme.BORDER.u32(0.45f), rounding)
+        list.addRectFilled(x, y, x + width, y + height, fill, rounding)
         list.addRect(x, y, x + width, y + height, EditorTheme.BORDER_SOFT.u32(0.14f), rounding)
-        list.addLine(x + rounding, y + height - 1f, x + width - rounding, y + height - 1f, EditorTheme.BORDER.u32(0.5f), 1f)
-        EditorFonts.with(font) { list.addText(x + (width - Widgets.textWidth(text)) / 2f, y + padY, color, text) }
+        EditorFonts.with(font) {
+            list.addText(x + (width - Widgets.textWidth(text)) / 2f, y + textTop(font, height), color, text)
+        }
         return width
     }
 
-    fun piecesWidth(pieces: List<Piece>, font: ImFont = EditorFonts.smallMedium, padY: Float = PAD_Y): Float {
+    fun piecesWidth(pieces: List<Piece>, font: ImFont = EditorFonts.smallMedium, height: Float = height(font)): Float {
         var width = 0f
         for ((index, piece) in pieces.withIndex()) {
             if (index > 0) width += GAP
-            width += if (piece.key) width(piece.text, font, padY) else Widgets.textWidth(piece.text)
+            width += if (piece.key) width(piece.text, font, height) else Widgets.textWidth(piece.text)
         }
         return width
     }
 
     fun mixedWidth(text: String, font: ImFont = EditorFonts.smallMedium): Float = piecesWidth(pieces(text), font)
+
+    fun drawPieces(
+        list: ImDrawList,
+        pieces: List<Piece>,
+        x: Float,
+        top: Float,
+        rowHeight: Float,
+        font: ImFont = EditorFonts.smallMedium,
+        color: Int = EditorTheme.TEXT_MUTED.u32,
+        textColor: Int = EditorTheme.TEXT_DIM.u32,
+        capHeight: Float = height(font),
+    ): Float {
+        val textSize = ImGui.getFontSize().toFloat()
+        var cursor = x
+        for ((index, piece) in pieces.withIndex()) {
+            if (index > 0) cursor += GAP
+            if (piece.key) {
+                cursor += draw(list, cursor, top + (rowHeight - capHeight) / 2f, piece.text, font, color, capHeight)
+            } else {
+                list.addText(cursor, top + (rowHeight - textSize) / 2f, textColor, piece.text)
+                cursor += Widgets.textWidth(piece.text)
+            }
+        }
+        return cursor - x
+    }
 
     fun render(
         pieces: List<Piece>,
@@ -112,18 +144,8 @@ object KeyCaps {
         val list = ImGui.getWindowDrawList()
         val x0 = ImGui.getCursorScreenPosX()
         val y0 = ImGui.getCursorScreenPosY()
-        val textSize = ImGui.getFontSize().toFloat()
-        var x = x0
-        for ((index, piece) in pieces.withIndex()) {
-            if (index > 0) x += GAP
-            if (piece.key) {
-                x += draw(list, x, y0 + (lineHeight - height(font)) / 2f, piece.text, font, color)
-            } else {
-                list.addText(x, y0 + (lineHeight - textSize) / 2f, textColor, piece.text)
-                x += Widgets.textWidth(piece.text)
-            }
-        }
-        ImGui.dummy(maxOf(1f, x - x0), lineHeight)
+        val width = drawPieces(list, pieces, x0, y0, lineHeight, font, color, textColor)
+        ImGui.dummy(maxOf(1f, width), lineHeight)
     }
 
     fun cap(
@@ -148,34 +170,27 @@ object KeyCaps {
         font: ImFont = EditorFonts.smallMedium,
         height: Float = ImGui.getFrameHeight(),
     ): Boolean {
-        val capWidth = maxOf(width(text, font), EditorFonts.px(44f))
         val capHeight = height(font)
+        val capWidth = maxOf(width(text, font, capHeight), EditorFonts.px(44f))
         val width = capWidth + EditorFonts.px(8f)
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
         val pressed = ImGui.invisibleButton(id, width, height)
         val hovered = ImGui.isItemHovered()
-        val list = ImGui.getWindowDrawList()
-        val capX = x + (width - capWidth) / 2f
-        val capY = y + (height - capHeight) / 2f
-        val rounding = EditorFonts.px(4f)
-        list.addRectFilled(
-            capX,
-            capY,
-            capX + capWidth,
-            capY + capHeight,
-            if (ImGui.isItemActive()) EditorTheme.CONTROL_ACTIVE.u32 else if (hovered) EditorTheme.CONTROL_HOVER.u32 else EditorTheme.CONTROL.u32,
-            rounding
-        )
-        list.addRect(capX, capY, capX + capWidth, capY + capHeight, EditorTheme.BORDER_SOFT.u32(0.14f), rounding)
-        list.addLine(capX + rounding, capY + capHeight - 1f, capX + capWidth - rounding, capY + capHeight - 1f, EditorTheme.BORDER.u32(0.5f), 1f)
-        EditorFonts.with(font) { list.addText(capX + (capWidth - Widgets.textWidth(text)) / 2f, capY + PAD_Y, color, text) }
+        val fill = when {
+            ImGui.isItemActive() -> EditorTheme.CONTROL_ACTIVE.u32
+            hovered -> EditorTheme.CONTROL_HOVER.u32
+            else -> EditorTheme.CONTROL.u32
+        }
+        draw(ImGui.getWindowDrawList(), x + (width - capWidth) / 2f, y + (height - capHeight) / 2f, text, font, color, capHeight, fill)
         if (hovered) Widgets.cursorHand()
         return pressed
     }
 
     private val WHITESPACE = Regex("\\s+")
+    private const val CAP_CENTER = 0.30f
     private val PAD_X: Float get() = EditorFonts.px(5f)
     private val PAD_Y: Float get() = EditorFonts.px(2f)
+    private val ROW_INSET: Float get() = EditorFonts.px(4.5f)
     val GAP: Float get() = EditorFonts.px(5f)
 }

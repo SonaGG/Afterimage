@@ -1,222 +1,164 @@
 package gg.sona.afterimage.editor.imgui
 
-import gg.sona.afterimage.camera.CameraKeyframe
-import gg.sona.afterimage.camera.CameraMode
-import gg.sona.afterimage.camera.CameraSettings
-import gg.sona.afterimage.camera.track.Keyframe
-import gg.sona.afterimage.camera.track.SegmentMode
-import gg.sona.afterimage.clip.Clip
 import gg.sona.afterimage.core.time.Nanos
-import gg.sona.afterimage.editor.*
-import gg.sona.afterimage.editor.commands.*
-import gg.sona.afterimage.replay.session.ReplaySession
+import gg.sona.afterimage.editor.EditorSession
+import gg.sona.afterimage.editor.LaneKind
+import gg.sona.afterimage.editor.Selection
+import gg.sona.afterimage.editor.commands.SetInOutPoints
+import gg.sona.afterimage.editor.commands.SetLaneState
 import imgui.ImDrawList
 import imgui.ImGui
+import imgui.flag.ImGuiHoveredFlags
 import imgui.flag.ImGuiKey
 import imgui.flag.ImGuiMouseButton
 import imgui.flag.ImGuiMouseCursor
 import imgui.flag.ImGuiWindowFlags
-import imgui.type.ImString
 import java.util.*
+import kotlin.math.abs
 import kotlin.math.ln
+import kotlin.math.pow
 
 class TimelinePanel(private val context: EditorContext) :
-    AbstractPanel("Timeline", DockArea.BOTTOM, Icon.CLOCK, flags = ImGuiWindowFlags.NoScrollbar) {
+    AbstractPanel("Timeline", DockArea.BOTTOM, Icon.CLOCK, flags = ImGuiWindowFlags.NoScrollbar or ImGuiWindowFlags.NoScrollWithMouse) {
 
-    private enum class DragKind { NONE, SCRUB, IN_POINT, OUT_POINT, KEYFRAMES, VALUE_KEY, VIEW_KEY, PACK_KEY, MARKER, TIMELAPSE, CLIP_BODY, CLIP_START, CLIP_END, PAN, BOX, NAV_THUMB, NAV_LEFT, NAV_RIGHT }
+    private enum class DragKind { NONE, SCRUB, IN_POINT, OUT_POINT, MOVE, CLIP_START, CLIP_END, PAN, BOX, NAV_THUMB, NAV_LEFT, NAV_RIGHT, SCROLLBAR, REORDER }
 
-    private class PoseKey(val entityId: Int, val timeNanos: Long, val parts: Int)
-
-    private class Lane(
-        val kind: LaneKind,
-        val label: String,
-        val baseHeight: Float,
-        val strip: EditorTheme.Rgb,
-        val rows: (() -> Int)? = null,
-    ) {
-        val rowHeight: Float get() = EditorFonts.px(baseHeight)
-        val height: Float get() = rowHeight * maxOf(1, rows?.invoke() ?: 1)
-    }
+    private val geometry = TimelineGeometry()
+    private val cache = TimelineCache()
+    private val actions = TimelineActions(context)
+    private val gameLanes = GameLanes(context, geometry)
+    private val lanes = TimelineLanes(context, geometry, cache, gameLanes)
+    private val menus = TimelineMenus(context, actions, cache, lanes, gameLanes)
 
     private var drag = DragKind.NONE
-    private var dragId: Any? = null
-    private var dragTimes: Set<Long> = emptySet()
-    private var dragDelta = 0L
-    private var dragDuplicate = false
+    private var dragItem: TimelineItem? = null
+    private var dragAdditiveToggle = false
+    private var dragMoved = false
+    private var dragStartX = 0f
+    private var dragStartY = 0f
     private var dragOriginNanos = 0L
-    private var dragStartMouseX = 0f
-    private var dragStartMouseY = 0f
     private var dragCurrentNanos = 0L
-    private var dragClipStart = 0L
-    private var dragClipEnd = 0L
+    private var dragAnchorNanos = 0L
+    private var dragClip: UUID? = null
     private var navOriginOffset = 0L
     private var navOriginVisible = 0L
+    private var scrollOrigin = 0f
     private var scrubTarget = -1L
     private var lastScrubSeekNanos = 0L
+    private var reorderKind: LaneKind? = null
+    private var contextItem: TimelineItem? = null
     private var contextNanos = 0L
-    private var contextKeyframe: Long? = null
-    private var contextValue: ValueKey? = null
-    private var contextView: Long? = null
-    private var contextPack: Long? = null
-    private var dragLane: ValueLane? = null
-    private var contextClip: UUID? = null
-    private var contextMarker: UUID? = null
-    private var contextTimelapse: UUID? = null
-    private var contextPose: PoseKey? = null
-    private var contextLane: LaneKind? = null
-    private val renameBuffer = ImString("", 64)
-    private val valueHolder = FloatArray(1)
+    private var contextLane: TrackSpec? = null
+    private var contextTrack: TrackSpec? = null
+    private var trackMenuRequested = false
+    private var activeHeader: LaneKind? = null
 
-    private var originX = 0f
     private var originY = 0f
-    private var headerX = 0f
-    private var width = 1f
-    private var tracksHeight = 0f
     private var canvasHeight = 0f
-    private var visibleNanos = 1L
     private var duration = 1L
-
-    private var cacheSession: EditorSession? = null
-    private var cacheVersion = -1L
-    private var keyframes: List<CameraKeyframe> = emptyList()
-    private var keyTimes: LongArray = LongArray(0)
-    private var valueKeys: Map<ValueLane, List<Keyframe<Double>>> = emptyMap()
-    private var viewKeys: List<Keyframe<ViewState>> = emptyList()
-    private var packKeys: List<Keyframe<PackState>> = emptyList()
-    private var clips: List<Clip> = emptyList()
-    private var markers: List<TimelineMarker> = emptyList()
-    private var timelapses: List<TimelapseMark> = emptyList()
-    private var poseKeys: List<PoseKey> = emptyList()
-    private val geometry = TimelineGeometry()
-    private val gameLanes = GameLanes(context, geometry)
-    private val allLanes: List<Lane> = BASE_LANES + listOf(
-        Lane(LaneKind.PLAYERS, "Players", 20f, EditorTheme.ACCENT_TEXT) { gameLanes.playerRowCount() },
-        Lane(LaneKind.WORLD, "World", 18f, EditorTheme.KEYFRAME_LINEAR) { gameLanes.worldRows().size },
-        Lane(LaneKind.MOMENTS, "Moments", 26f, EditorTheme.KEYFRAME_HOLD),
-    )
-    private var lanes: List<Lane> = allLanes
-    private var contextMoment: UUID? = null
-    private var contextHeader: LaneKind? = null
 
     override fun content(frame: FrameContext) {
         val session = context.session
         val replay = session?.replay
         if (session == null || replay == null) {
-            Widgets.emptyState(
-                "No replay open",
-                "Open a recording from the Project panel to edit its timeline",
-                Icon.FILM
-            )
+            Widgets.emptyState("No replay open", "Open a recording from the library to edit its timeline", Icon.FILM)
             return
         }
         val view = context.timeline
         duration = maxOf(1L, replay.durationNanos)
-        refreshCaches(session)
-        toolbar(session, view)
-
-        val order = context.ui.laneOrder
-        gameLanes.prepare(session)
-        lanes = allLanes.sortedBy { order.indexOf(it.kind) }.filter { laneVisible(it.kind, view) }
-        tracksHeight = lanes.sumOf { it.height.toDouble() }.toFloat()
-        headerX = ImGui.getCursorScreenPosX()
-        originX = headerX + HEADER_WIDTH
-        originY = ImGui.getCursorScreenPosY()
-        width = maxOf(1f, ImGui.getContentRegionAvailX() - HEADER_WIDTH)
-        val available = ImGui.getContentRegionAvailY()
-        canvasHeight = maxOf(RULER_HEIGHT + tracksHeight + NAV_HEIGHT + NAV_GAP, available - 2f)
-        val totalHeight = canvasHeight
-        visibleNanos = maxOf(1L, (duration / view.zoom).toLong())
-        if (view.followPlayhead && replay.playing && drag == DragKind.NONE) followPlayhead(replay.positionNanos, view)
-        view.offsetNanos = view.offsetNanos.coerceIn(0L, maxOf(0L, duration - visibleNanos))
-        geometry.headerX = headerX
-        geometry.originX = originX
-        geometry.width = width
-        geometry.offsetNanos = view.offsetNanos
-        geometry.visibleNanos = visibleNanos
-        geometry.duration = duration
-
-        val drawList = ImGui.getWindowDrawList()
-        drawList.addRectFilled(
-            headerX,
-            originY,
-            originX + width,
-            originY + maxOf(totalHeight, available),
-            EditorTheme.PANEL_SUNKEN.u32
-        )
-        drawHeaders(drawList, session)
-        headerWidgets(session)
-        headerMenus(session, view)
-        addTrackButton(view)
-
-        ImGui.setCursorScreenPos(originX, originY)
-        ImGui.invisibleButton("timeline-canvas", width, totalHeight)
-        val hovered = ImGui.isItemHovered()
-        val active = ImGui.isItemActive()
-        drawList.pushClipRect(originX, originY, originX + width, originY + totalHeight, true)
-        drawLaneBackgrounds(drawList)
-        drawWorkArea(drawList, session)
-        drawRuler(drawList, view)
-        drawCameraLane(drawList, session, frame.nowNanos)
-        for (lane in ValueLane.entries) if (lanes.any { it.kind == lane.kind }) drawValueLane(drawList, session, lane)
-        if (lanes.any { it.kind == LaneKind.VIEW }) drawViewLane(drawList, session)
-        if (lanes.any { it.kind == LaneKind.TEXTURE_PACK }) drawPackLane(drawList, session)
-        drawClipLane(drawList, session)
-        drawMarkerLane(drawList, session)
-        drawTimelapseLane(drawList, session)
-        drawPoseLane(drawList, session)
-        drawEventLane(drawList, session)
-        lanes.firstOrNull { it.kind == LaneKind.PLAYERS }
-            ?.let { gameLanes.drawPlayers(drawList, laneTop(it.kind), it.rowHeight) }
-        lanes.firstOrNull { it.kind == LaneKind.WORLD }
-            ?.let { gameLanes.drawWorld(drawList, laneTop(it.kind), it.rowHeight) }
-        lanes.firstOrNull { it.kind == LaneKind.MOMENTS }
-            ?.let { gameLanes.drawMoments(drawList, session, laneTop(it.kind), it.height) }
-        drawInOutHandles(drawList, session)
-        val playheadNanos = if (drag == DragKind.SCRUB && scrubTarget >= 0L) scrubTarget else replay.positionNanos
-        drawPlayhead(drawList, playheadNanos)
-        if (drag == DragKind.BOX) drawBox(drawList)
-        if (hovered && drag == DragKind.NONE) drawHoverLine(drawList)
-        drawList.popClipRect()
-        drawNavigator(drawList, view)
-
-        if (hovered || active || drag != DragKind.NONE) handleInput(session, view, hovered, frame.nowNanos)
-        if (hovered && drag == DragKind.NONE) hoverFeedback(session)
-        if (hovered && ImGui.isMouseClicked(ImGuiMouseButton.Right)) prepareContext(session)
-        if (ImGui.beginPopupContextItem("timeline-context")) {
-            contextMenu(session)
-            ImGui.endPopup()
+        if (cache.refresh(session)) {
+            geometry.scrollY = 0f
+            drag = DragKind.NONE
         }
-        if ((ImGui.isWindowFocused() || hovered) && !ImGui.getIO().wantTextInput && (ImGui.isKeyPressed(
-                ImGuiKey.Delete,
-                false
-            ) || ImGui.isKeyPressed(ImGuiKey.Backspace, false))
-        ) deleteSelection(session)
-        ImGui.setCursorScreenPos(headerX, originY + totalHeight)
+        gameLanes.prepare(session)
+        toolbar(session, view)
+        layout(session, view)
+        val list = ImGui.getWindowDrawList()
+        list.addRectFilled(geometry.headerX, originY, geometry.right, originY + canvasHeight, EditorTheme.PANEL_SUNKEN.u32)
+
+        ImGui.setCursorScreenPos(geometry.originX, originY)
+        ImGui.invisibleButton("timeline-canvas", geometry.width, canvasHeight)
+        val hovered = ImGui.isItemHovered()
+        val mouseX = ImGui.getMousePosX()
+        val mouseY = ImGui.getMousePosY()
+        val overTracks = hovered && mouseY >= geometry.tracksTop && mouseY < geometry.tracksBottom
+        lanes.hovered = if (overTracks && drag == DragKind.NONE) lanes.itemAt(session, mouseX, mouseY) else null
+
+        list.pushClipRect(geometry.originX, geometry.tracksTop, geometry.right, geometry.tracksBottom, true)
+        laneBackgrounds(list)
+        workArea(list, session)
+        grid(list, view)
+        segments(list, session)
+        lanes.drawGuides(list, session)
+        lanes.draw(list, session, frame.nowNanos)
+        if (drag == DragKind.BOX && dragMoved) box(list)
+        list.popClipRect()
+
+        ruler(list, session, view)
+        list.pushClipRect(geometry.originX, geometry.rulerTop, geometry.right, geometry.tracksBottom, true)
+        playhead(list, session)
+        if (hovered && drag == DragKind.NONE && mouseY < geometry.tracksBottom) skimmer(list, mouseX)
+        list.popClipRect()
+        navigator(list, view)
+        scrollbar(list)
+        headers(session, view)
+
+        if (!hovered && drag == DragKind.NONE && ImGui.isWindowHovered() && ImGui.getIO().mouseWheel != 0f && mouseX >= geometry.headerX && mouseX < geometry.originX && mouseY >= geometry.tracksTop && mouseY < geometry.tracksBottom)
+            scrollBy(-ImGui.getIO().mouseWheel * EditorFonts.px(40f))
+        if (hovered || drag != DragKind.NONE) input(session, view, hovered, mouseX, mouseY, frame.nowNanos)
+        if (hovered && drag == DragKind.NONE) hoverFeedback(session, mouseX, mouseY)
+        if (hovered && ImGui.isMouseClicked(ImGuiMouseButton.Right)) {
+            prepareContext(session, mouseX, mouseY)
+            ImGui.openPopup("timeline-context")
+        }
+        if (Widgets.beginPopup("timeline-context")) {
+            val item = contextItem
+            if (item != null) menus.item(session, item) else menus.empty(session, contextNanos, contextLane, geometry.lanes)
+            Widgets.endPopup()
+        }
+        if (Widgets.beginPopup("track-menu")) {
+            contextTrack?.let { menus.track(session, view, it) }
+            Widgets.endPopup()
+        }
+        keyboard(session, hovered)
+        ImGui.setCursorScreenPos(geometry.headerX, originY + canvasHeight)
         ImGui.dummy(1f, 1f)
     }
 
-    private fun refreshCaches(session: EditorSession) {
-        val version = session.commands.version
-        if (session === cacheSession && version == cacheVersion) return
-        cacheSession = session
-        cacheVersion = version
-        keyframes = session.project.camera.keyframes()
-        keyTimes = LongArray(keyframes.size) { keyframes[it].timeNanos }
-        valueKeys = ValueLane.entries.associateWith { session.project.valueTrack(it).keyframes.toList() }
-        viewKeys = session.project.views.keyframes.toList()
-        packKeys = session.project.packs.keyframes.toList()
-        clips = session.project.clips.toList()
-        markers = session.project.markers.toList()
-        timelapses = session.project.timelapses.toList()
-        poseKeys = session.project.poses.flatMap { (id, track) ->
-            track.keyframes.map {
-                PoseKey(
-                    id,
-                    it.timeNanos,
-                    it.value.parts.size
-                )
-            }
-        }
+    private fun layout(session: EditorSession, view: TimelineView) {
+        val order = context.ui.laneOrder
+        val visible = TrackSpec.ALL.filter { visible(it, view) }.sortedBy { order.indexOf(it.kind) }
+        geometry.headerX = ImGui.getCursorScreenPosX()
+        geometry.originX = geometry.headerX + HEADER_WIDTH
+        geometry.width = maxOf(1f, ImGui.getContentRegionAvailX() - HEADER_WIDTH)
+        originY = ImGui.getCursorScreenPosY()
+        canvasHeight = maxOf(RULER_HEIGHT + EditorFonts.px(40f) + NAV_GAP + NAV_HEIGHT, ImGui.getContentRegionAvailY() - 1f)
+        geometry.duration = duration
+        geometry.rulerTop = originY
+        geometry.tracksTop = originY + RULER_HEIGHT
+        geometry.tracksBottom = originY + canvasHeight - NAV_HEIGHT - NAV_GAP
+        geometry.visibleNanos = maxOf(1L, (duration / view.zoom).toLong())
+        if (view.followPlayhead && session.replay?.playing == true && drag == DragKind.NONE) follow(session.playheadNanos, view)
+        view.offsetNanos = view.offsetNanos.coerceIn(0L, maxOf(0L, duration - geometry.visibleNanos))
+        geometry.offsetNanos = view.offsetNanos
+        geometry.layout(visible) { heightOf(it) }
+        val viewport = geometry.tracksBottom - geometry.tracksTop
+        geometry.scrollY = geometry.scrollY.coerceIn(0f, maxOf(0f, geometry.contentHeight - viewport))
+        geometry.layout(visible) { heightOf(it) }
+        geometry.dragActive = drag == DragKind.MOVE && dragMoved
+        geometry.dragDeltaNanos = if (geometry.dragActive) dragCurrentNanos - dragOriginNanos else 0L
+    }
+
+    private fun heightOf(spec: TrackSpec): Float = when (spec.kind) {
+        LaneKind.PLAYERS -> spec.rowHeight * maxOf(1, gameLanes.playerRowCount())
+        LaneKind.WORLD -> spec.rowHeight * maxOf(1, gameLanes.worldRows().size)
+        else -> spec.rowHeight
+    }
+
+    private fun visible(spec: TrackSpec, view: TimelineView): Boolean = when (spec.kind) {
+        LaneKind.CAMERA -> true
+        LaneKind.EVENTS, LaneKind.PLAYERS, LaneKind.WORLD, LaneKind.MOMENTS -> spec.kind in view.shownLanes
+        else -> cache.hasContent(spec.kind) || spec.kind in view.shownLanes
     }
 
     private fun toolbar(session: EditorSession, view: TimelineView) {
@@ -225,20 +167,15 @@ class TimelinePanel(private val context: EditorContext) :
         try {
             val rowY = ImGui.getCursorScreenPosY()
             val right = ImGui.getCursorScreenPosX() + ImGui.getContentRegionAvailX()
-            if (Widgets.iconButton("tl-key", Icon.KEYFRAME_ADD, TOOL_SIZE, "Add camera keyframe at playhead  Ctrl+K"))
-                session.keyframeAtPlayhead(context.host.camera.currentPose())
+            if (Widgets.iconButton("tl-key", Icon.KEYFRAME_ADD, TOOL_SIZE, "Add camera keyframe at playhead  Ctrl+K")) actions.addCameraKeyframe(session, replay.positionNanos)
             ImGui.sameLine()
-            if (Widgets.iconButton("tl-marker", Icon.MARKER, TOOL_SIZE, "Add marker at playhead  M")) addMarker(session, replay.positionNanos)
-            ImGui.sameLine()
-            if (Widgets.iconButton("tl-clip", Icon.FILM, TOOL_SIZE, "Create clip from the in and out points")) clipFromInOut(session)
+            if (Widgets.iconButton("tl-marker", Icon.MARKER, TOOL_SIZE, "Add marker at playhead  M")) actions.addMarker(session, replay.positionNanos)
             Widgets.verticalSeparator(TOOL_SIZE)
-            if (Widgets.iconButton("tl-in", Icon.MARK_IN, TOOL_SIZE, "Set in point at playhead  I")) session.execute(
-                SetInOutPoints(replay.positionNanos, maxOf(replay.positionNanos, outPoint(session)))
-            )
+            if (Widgets.iconButton("tl-in", Icon.MARK_IN, TOOL_SIZE, "Set in point at playhead  I")) actions.setInPoint(session, replay.positionNanos)
             ImGui.sameLine()
-            if (Widgets.iconButton("tl-out", Icon.MARK_OUT, TOOL_SIZE, "Set out point at playhead  O")) session.execute(
-                SetInOutPoints(minOf(session.project.inPointNanos, replay.positionNanos), replay.positionNanos)
-            )
+            if (Widgets.iconButton("tl-out", Icon.MARK_OUT, TOOL_SIZE, "Set out point at playhead  O")) actions.setOutPoint(session, replay.positionNanos)
+            ImGui.sameLine()
+            if (Widgets.iconButton("tl-clip", Icon.FILM, TOOL_SIZE, "Save the in to out range as a clip", enabled = actions.trimmed(session))) actions.clipFromInOut(session)
             ImGui.sameLine()
             Widgets.iconToggle("tl-loop", Icon.LOOP, context.loopPlayback, TOOL_SIZE, "Loop between the in and out points")
                 ?.let { context.loopPlayback = it }
@@ -246,19 +183,15 @@ class TimelinePanel(private val context: EditorContext) :
             ImGui.sameLine()
             ImGui.setCursorScreenPos(maxOf(ImGui.getCursorScreenPosX(), right - rightWidth), rowY)
             Widgets.measured("tl-right") {
-                Widgets.iconToggle("tl-snap", Icon.MAGNET, view.snapToTicks, TOOL_SIZE, "Snap to frames and items  hold Shift to bypass")
+                Widgets.iconToggle("tl-snap", Icon.MAGNET, view.snapToTicks, TOOL_SIZE, "Snap to frames, keyframes and markers  hold Shift to bypass")
                     ?.let { view.snapToTicks = it }
                 ImGui.sameLine()
-                Widgets.iconToggle("tl-follow", Icon.FOLLOW, view.followPlayhead, TOOL_SIZE, "Follow playhead while playing  Shift+F")
+                Widgets.iconToggle("tl-follow", Icon.FOLLOW, view.followPlayhead, TOOL_SIZE, "Keep the playhead in view while playing  Shift+F")
                     ?.let { view.followPlayhead = it }
                 Widgets.verticalSeparator(TOOL_SIZE)
-                if (Widgets.iconButton("tl-zoom-out", Icon.ZOOM_OUT, TOOL_SIZE, "Zoom out  wheel")) zoomAround(view, 1 / 1.5, session.playheadNanos)
-                ImGui.sameLine()
                 zoomSlider(view, session)
                 ImGui.sameLine()
-                if (Widgets.iconButton("tl-zoom-in", Icon.ZOOM_IN, TOOL_SIZE, "Zoom in  wheel")) zoomAround(view, 1.5, session.playheadNanos)
-                ImGui.sameLine()
-                if (Widgets.iconButton("tl-fit", Icon.FIT, TOOL_SIZE, "Fit whole replay")) {
+                if (Widgets.iconButton("tl-fit", Icon.FIT, TOOL_SIZE, "Fit the whole replay  Shift+Z")) {
                     view.zoom = 1.0
                     view.offsetNanos = 0L
                 }
@@ -266,11 +199,11 @@ class TimelinePanel(private val context: EditorContext) :
         } finally {
             EditorTheme.popToolbarStyle()
         }
-        ImGui.dummy(0f, 2f)
+        ImGui.dummy(0f, EditorFonts.px(2f))
     }
 
     private fun zoomSlider(view: TimelineView, session: EditorSession) {
-        val width = EditorFonts.px(90f)
+        val width = EditorFonts.px(96f)
         val height = TOOL_SIZE
         val x = ImGui.getCursorScreenPosX()
         val y = ImGui.getCursorScreenPosY()
@@ -278,9 +211,9 @@ class TimelinePanel(private val context: EditorContext) :
         val hovered = ImGui.isItemHovered()
         val active = ImGui.isItemActive()
         val maxZoom = maxOf(1.0, duration.toDouble() / MIN_VISIBLE)
-        val t = (Math.log(view.zoom) / Math.log(maxZoom)).toFloat().coerceIn(0f, 1f)
+        val t = (ln(view.zoom) / ln(maxZoom)).toFloat().coerceIn(0f, 1f)
         val list = ImGui.getWindowDrawList()
-        val pad = EditorFonts.px(6f)
+        val pad = EditorFonts.px(7f)
         val cy = y + height / 2f
         val track = EditorFonts.px(3f)
         list.addRectFilled(x + pad, cy - track / 2f, x + width - pad, cy + track / 2f, EditorTheme.CONTROL_HOVER.u32, track / 2f)
@@ -289,393 +222,455 @@ class TimelinePanel(private val context: EditorContext) :
         list.addCircleFilled(kx, cy, EditorFonts.px(if (active) 6f else 5f), EditorTheme.TEXT.u32, 16)
         if (active) {
             val next = ((ImGui.getMousePosX() - x - pad) / (width - pad * 2f)).coerceIn(0f, 1f)
-            val zoom = Math.pow(maxZoom, next.toDouble()).coerceIn(1.0, maxZoom)
+            val zoom = maxZoom.pow(next.toDouble()).coerceIn(1.0, maxZoom)
             if (zoom != view.zoom) zoomAround(view, zoom / view.zoom, session.playheadNanos)
         }
-        if (hovered || active) Widgets.hint(String.format("Zoom %.1fx", view.zoom))
+        if (hovered || active) Widgets.hint(String.format("Zoom %.1fx   wheel zooms at the cursor, Shift+wheel scrolls", view.zoom))
     }
 
-    private fun laneTop(kind: LaneKind): Float {
-        var y = originY + RULER_HEIGHT
-        for (lane in lanes) {
-            if (lane.kind == kind) return y
-            y += lane.height
+    private fun laneBackgrounds(list: ImDrawList) {
+        val mouseY = ImGui.getMousePosY()
+        val mouseX = ImGui.getMousePosX()
+        val windowHovered = ImGui.isWindowHovered()
+        for ((index, lane) in geometry.lanes.withIndex()) {
+            if (!geometry.laneVisible(lane.kind)) continue
+            val top = geometry.laneTop(lane.kind)
+            val bottom = top + geometry.laneHeight(lane.kind)
+            list.addRectFilled(geometry.originX, top, geometry.right, bottom, (if (index % 2 == 0) EditorTheme.LANE_A else EditorTheme.LANE_B).u32)
+            if (drag == DragKind.NONE && windowHovered && mouseX >= geometry.headerX && mouseY >= top && mouseY < bottom)
+                list.addRectFilled(geometry.originX, top, geometry.right, bottom, EditorTheme.TEXT.u32(0.025f))
+            list.addLine(geometry.originX, bottom, geometry.right, bottom, EditorTheme.LANE_LINE.u32, 1f)
         }
-        return y
     }
 
-    private fun laneHeight(kind: LaneKind): Float = lanes.firstOrNull { it.kind == kind }?.height ?: 0f
-
-    private fun laneVisible(kind: LaneKind, view: TimelineView): Boolean = when (kind) {
-        LaneKind.CAMERA, LaneKind.CLIPS, LaneKind.MARKERS, LaneKind.EVENTS -> true
-        LaneKind.VIEW -> viewKeys.isNotEmpty() || kind in view.shownLanes
-        LaneKind.TEXTURE_PACK -> packKeys.isNotEmpty() || kind in view.shownLanes
-        LaneKind.TIMELAPSE -> timelapses.isNotEmpty() || kind in view.shownLanes
-        LaneKind.POSE -> poseKeys.isNotEmpty() || kind in view.shownLanes
-        LaneKind.PLAYERS -> kind in view.shownLanes || (gameLanes.playerRows.isNotEmpty() && kind !in view.hiddenLanes)
-        LaneKind.WORLD -> kind in view.shownLanes || (gameLanes.index != null && kind !in view.hiddenLanes)
-        LaneKind.MOMENTS -> kind in view.shownLanes || (context.session?.let {
-            gameLanes.moments(it).isNotEmpty()
-        } == true && kind !in view.hiddenLanes)
-
-        else -> ValueLane.entries.firstOrNull { it.kind == kind }
-            ?.let { valueKeys[it]?.isNotEmpty() == true } == true || kind in view.shownLanes
-    }
-
-    private fun laneEmpty(kind: LaneKind): Boolean = when (kind) {
-        LaneKind.VIEW -> viewKeys.isEmpty()
-        LaneKind.TEXTURE_PACK -> packKeys.isEmpty()
-        LaneKind.TIMELAPSE -> timelapses.isEmpty()
-        LaneKind.POSE -> poseKeys.isEmpty()
-        LaneKind.PLAYERS, LaneKind.WORLD, LaneKind.MOMENTS -> false
-        else -> ValueLane.entries.firstOrNull { it.kind == kind }?.let { valueKeys[it].isNullOrEmpty() } ?: true
-    }
-
-    private fun optional(kind: LaneKind): Boolean = kind !in CORE_LANES
-
-    private fun laneAt(mouseY: Float): Lane? {
-        var y = originY + RULER_HEIGHT
-        for (lane in lanes) {
-            if (mouseY >= y && mouseY < y + lane.height) return lane
-            y += lane.height
+    private fun workArea(list: ImDrawList, session: EditorSession) {
+        val inNanos = if (drag == DragKind.IN_POINT) dragCurrentNanos else actions.inPoint(session)
+        val outNanos = if (drag == DragKind.OUT_POINT) dragCurrentNanos else actions.outPoint(session)
+        val left = geometry.xAt(inNanos)
+        val right = geometry.xAt(outNanos)
+        val top = geometry.tracksTop
+        val bottom = geometry.tracksBottom
+        if (left > geometry.originX) list.addRectFilled(geometry.originX, top, minOf(left, geometry.right), bottom, EditorTheme.APP_BG.u32(0.4f))
+        if (right < geometry.right) list.addRectFilled(maxOf(right, geometry.originX), top, geometry.right, bottom, EditorTheme.APP_BG.u32(0.4f))
+        if (inNanos > 0L || outNanos < duration) {
+            val color = EditorTheme.SELECTION.u32(0.45f)
+            if (left >= geometry.originX && left <= geometry.right) list.addLine(left, top, left, bottom, color, 1f)
+            if (right >= geometry.originX && right <= geometry.right) list.addLine(right, top, right, bottom, color, 1f)
         }
-        return null
     }
 
-    private fun drawHeaders(drawList: ImDrawList, session: EditorSession) {
-        drawList.addRectFilled(headerX, originY, originX, tracksBottom(), EditorTheme.LANE_HEADER.u32)
+    private fun grid(list: ImDrawList, view: TimelineView) {
+        val step = rulerStep(view)
+        var tick = (view.offsetNanos / step) * step
+        val end = view.offsetNanos + geometry.visibleNanos
+        while (tick <= end) {
+            val x = geometry.xAt(tick)
+            if (x >= geometry.originX && x <= geometry.right) list.addLine(x, geometry.tracksTop, x, geometry.tracksBottom, EditorTheme.LANE_LINE.u32(0.16f), 1f)
+            tick += step
+        }
+    }
+
+    private fun segments(list: ImDrawList, session: EditorSession) {
+        val project = session.project
+        if (!project.isSequence) return
+        val spans = project.segmentSpans()
+        for ((index, span) in spans.withIndex()) {
+            val x1 = geometry.xAt(span.first).coerceIn(geometry.originX, geometry.right)
+            val x2 = geometry.xAt(span.second).coerceIn(geometry.originX, geometry.right)
+            if (x2 <= x1) continue
+            val color = SEGMENT_COLORS[index % SEGMENT_COLORS.size]
+            list.addRectFilled(x1, geometry.tracksTop, x2, geometry.tracksBottom, color.u32(0.04f))
+            list.addLine(x1, geometry.tracksTop, x1, geometry.tracksBottom, color.u32(0.45f), 1f)
+        }
+    }
+
+    private fun ruler(list: ImDrawList, session: EditorSession, view: TimelineView) {
+        val top = geometry.rulerTop
+        val bottom = geometry.tracksTop
+        list.addRectFilled(geometry.originX, top, geometry.right, bottom, EditorTheme.RULER_BG.u32)
+        list.pushClipRect(geometry.originX, top, geometry.right, bottom, true)
+        val project = session.project
+        if (project.isSequence) {
+            for ((index, span) in project.segmentSpans().withIndex()) {
+                val x1 = geometry.xAt(span.first).coerceIn(geometry.originX, geometry.right)
+                val x2 = geometry.xAt(span.second).coerceIn(geometry.originX, geometry.right)
+                if (x2 <= x1) continue
+                val color = SEGMENT_COLORS[index % SEGMENT_COLORS.size]
+                list.addRectFilled(x1, top, x2, top + EditorFonts.px(2f), color.u32(0.8f))
+                val label = "${index + 1}  " + project.segments[index].gameplay.fileName.toString().substringBeforeLast('.')
+                EditorFonts.with(EditorFonts.small) {
+                    val labelWidth = Widgets.textWidth(label)
+                    if (labelWidth + EditorFonts.px(12f) < x2 - x1) list.addText(x2 - labelWidth - EditorFonts.px(6f), top + EditorFonts.px(3f), color.u32(0.75f), label)
+                }
+            }
+        }
+        val step = rulerStep(view)
+        val minor = minorStep(step, view)
+        val labelBand = top + EditorFonts.px(16f)
+        var tick = (view.offsetNanos / minor) * minor
+        val end = view.offsetNanos + geometry.visibleNanos
         EditorFonts.with(EditorFonts.small) {
-            drawList.addText(
-                headerX + EditorFonts.px(12f),
-                originY + (RULER_HEIGHT - ImGui.getFontSize()) / 2f,
-                EditorTheme.TEXT_DIM.u32,
-                Widgets.clip(session.project.name, HEADER_WIDTH - EditorFonts.px(44f))
-            )
+            while (tick <= end) {
+                val x = geometry.xAt(tick)
+                if (x >= geometry.originX && x <= geometry.right) {
+                    val major = tick % step == 0L
+                    val height = if (major) EditorFonts.px(7f) else EditorFonts.px(3f)
+                    list.addLine(x, labelBand - height, x, labelBand, if (major) EditorTheme.TEXT_MUTED.u32(0.8f) else EditorTheme.TEXT_DIM.u32(0.5f), 1f)
+                    if (major) list.addText(x + EditorFonts.px(4f), top + EditorFonts.px(2f), EditorTheme.TEXT_MUTED.u32, rulerLabel(tick, step, view))
+                }
+                tick += minor
+            }
         }
-        var y = originY + RULER_HEIGHT
-        for (lane in lanes) {
-            val muted = session.project.lane(lane.kind).muted
-            drawList.addRectFilled(
-                headerX + EditorFonts.px(4f),
-                y + EditorFonts.px(5f),
-                headerX + EditorFonts.px(6f),
-                y + lane.height - EditorFonts.px(5f),
-                if (muted) EditorTheme.TEXT_DIM.u32(0.4f) else lane.strip.u32,
-                1f
-            )
-            drawList.addLine(headerX, y + lane.height, originX + width, y + lane.height, EditorTheme.LANE_LINE.u32, 1f)
-            val iconSize = EditorFonts.px(13f)
-            Icons.draw(
-                drawList,
-                LANE_ICONS[lane.kind] ?: Icon.SLIDERS,
-                headerX + EditorFonts.px(12f),
-                y + (lane.rowHeight - iconSize) / 2f,
-                iconSize,
-                if (muted) EditorTheme.TEXT_DIM.u32 else lane.strip.u32
+        workAreaBar(list, session)
+        list.addLine(geometry.originX, bottom - 1f, geometry.right, bottom - 1f, EditorTheme.BORDER.u32, 1f)
+        list.popClipRect()
+    }
+
+    private fun workAreaBar(list: ImDrawList, session: EditorSession) {
+        val inNanos = if (drag == DragKind.IN_POINT) dragCurrentNanos else actions.inPoint(session)
+        val outNanos = if (drag == DragKind.OUT_POINT) dragCurrentNanos else actions.outPoint(session)
+        val trimmed = inNanos > 0L || outNanos < duration
+        val left = geometry.xAt(inNanos)
+        val right = geometry.xAt(outNanos)
+        val cy = geometry.tracksTop - EditorFonts.px(7f)
+        val half = EditorFonts.px(2f)
+        val color = if (trimmed) EditorTheme.SELECTION else EditorTheme.IN_OUT
+        val x1 = left.coerceIn(geometry.originX, geometry.right)
+        val x2 = right.coerceIn(geometry.originX, geometry.right)
+        if (x2 > x1) list.addRectFilled(x1, cy - half, x2, cy + half, color.u32(if (trimmed) 0.85f else 0.3f), half)
+        val handle = if (drag == DragKind.NONE) handleAt(session, ImGui.getMousePosX(), ImGui.getMousePosY()) else null
+        handle(list, left, cy, color, trimmed || handle == DragKind.IN_POINT || drag == DragKind.IN_POINT)
+        handle(list, right, cy, color, trimmed || handle == DragKind.OUT_POINT || drag == DragKind.OUT_POINT)
+    }
+
+    private fun handle(list: ImDrawList, x: Float, cy: Float, color: EditorTheme.Rgb, bright: Boolean) {
+        if (x < geometry.originX - HANDLE_WIDTH || x > geometry.right + HANDLE_WIDTH) return
+        val half = HANDLE_WIDTH / 2f
+        val h = HANDLE_HEIGHT / 2f
+        list.addRectFilled(x - half, cy - h, x + half, cy + h, color.u32(if (bright) 1f else 0.55f), EditorFonts.px(2f))
+        list.addLine(x, cy - h * 0.45f, x, cy + h * 0.45f, EditorTheme.PANEL_SUNKEN.u32(0.7f), 1f)
+    }
+
+    private fun rulerLabel(nanos: Long, step: Long, view: TimelineView): String =
+        if (step < Nanos.PER_SECOND) TimeFormat.timecode(nanos, view.renderFps) else TimeFormat.clock(nanos).substringBefore('.')
+
+    private fun rulerStep(view: TimelineView): Long {
+        val target = (LABEL_SPACING / geometry.width * geometry.visibleNanos).toLong()
+        val frame = view.frameNanos()
+        for (frames in FRAME_STEPS) {
+            val step = frames * frame
+            if (step >= Nanos.PER_SECOND) break
+            if (step >= target) return step
+        }
+        return SECOND_STEPS.firstOrNull { it >= target } ?: SECOND_STEPS.last()
+    }
+
+    private fun minorStep(step: Long, view: TimelineView): Long {
+        val frame = view.frameNanos()
+        if (step < Nanos.PER_SECOND) {
+            val framePixels = frame / geometry.nanosPerPixel
+            return if (framePixels >= 6.0 && step > frame) frame else step
+        }
+        val divisions = when (step) {
+            Nanos.ofSeconds(15), Nanos.ofSeconds(30), Nanos.ofSeconds(1800) -> 3L
+            Nanos.ofSeconds(60), Nanos.ofSeconds(120) -> 4L
+            else -> 5L
+        }
+        return step / divisions
+    }
+
+    private fun playhead(list: ImDrawList, session: EditorSession) {
+        val replay = session.replay ?: return
+        val nanos = if (drag == DragKind.SCRUB && scrubTarget >= 0L) scrubTarget else replay.positionNanos
+        val x = geometry.xAt(nanos)
+        if (x < geometry.originX - 8f || x > geometry.right + 8f) return
+        list.addLine(x, geometry.rulerTop + EditorFonts.px(2f), x, geometry.tracksBottom, EditorTheme.PLAYHEAD.u32, 1.5f)
+        val half = EditorFonts.px(5f)
+        val headTop = geometry.rulerTop + EditorFonts.px(1f)
+        val headBottom = headTop + EditorFonts.px(8f)
+        list.addRectFilled(x - half, headTop, x + half, headBottom, EditorTheme.PLAYHEAD.u32, EditorFonts.px(2f))
+        list.addTriangleFilled(x - half, headBottom - 1f, x + half, headBottom - 1f, x, headBottom + half, EditorTheme.PLAYHEAD.u32)
+        if (drag != DragKind.SCRUB) return
+        val label = TimeFormat.timecode(nanos, context.timeline.renderFps)
+        EditorFonts.with(EditorFonts.smallMedium) {
+            val labelWidth = Widgets.textWidth(label)
+            val pad = EditorFonts.px(5f)
+            val labelX = if (x + EditorFonts.px(10f) + labelWidth + pad * 2f > geometry.right) x - EditorFonts.px(10f) - labelWidth - pad * 2f else x + EditorFonts.px(9f)
+            val y = geometry.rulerTop + EditorFonts.px(2f)
+            list.addRectFilled(labelX, y, labelX + labelWidth + pad * 2f, y + ImGui.getFontSize() + EditorFonts.px(4f), EditorTheme.PLAYHEAD.u32(0.92f), EditorFonts.px(3f))
+            list.addText(labelX + pad, y + EditorFonts.px(2f), EditorTheme.PRIMARY_TEXT.u32, label)
+        }
+    }
+
+    private fun skimmer(list: ImDrawList, mouseX: Float) {
+        if (mouseX < geometry.originX || mouseX > geometry.right) return
+        list.addLine(mouseX, geometry.tracksTop, mouseX, geometry.tracksBottom, EditorTheme.SKIMMER.u32(0.45f), 1f)
+        val label = TimeFormat.clock(geometry.nanosAt(mouseX).coerceIn(0L, duration))
+        EditorFonts.with(EditorFonts.small) {
+            val labelWidth = Widgets.textWidth(label)
+            val pad = EditorFonts.px(3f)
+            val labelX = if (mouseX + EditorFonts.px(8f) + labelWidth + pad * 2f > geometry.right) mouseX - EditorFonts.px(8f) - labelWidth - pad * 2f else mouseX + EditorFonts.px(6f)
+            val y = geometry.rulerTop + EditorFonts.px(2f)
+            list.addRectFilled(labelX, y, labelX + labelWidth + pad * 2f, y + ImGui.getFontSize() + EditorFonts.px(2f), EditorTheme.APP_BG.u32(0.9f), EditorFonts.px(3f))
+            list.addText(labelX + pad, y + 1f, EditorTheme.TEXT_MUTED.u32, label)
+        }
+    }
+
+    private fun box(list: ImDrawList) {
+        val x1 = minOf(dragStartX, ImGui.getMousePosX())
+        val x2 = maxOf(dragStartX, ImGui.getMousePosX())
+        val y1 = minOf(dragStartY, ImGui.getMousePosY())
+        val y2 = maxOf(dragStartY, ImGui.getMousePosY())
+        list.addRectFilled(x1, y1, x2, y2, EditorTheme.TEXT.u32(0.07f))
+        list.addRect(x1, y1, x2, y2, EditorTheme.TEXT.u32(0.55f), 0f, 0, 1f)
+    }
+
+    private fun navTop(): Float = originY + canvasHeight - NAV_HEIGHT
+
+    private fun navigator(list: ImDrawList, view: TimelineView) {
+        val top = navTop()
+        val bottom = top + NAV_HEIGHT
+        list.addRectFilled(geometry.originX, top, geometry.right, bottom, EditorTheme.PANEL.u32, NAV_HEIGHT / 2f)
+        for (time in cache.keyTimes) {
+            val x = navX(time)
+            list.addRectFilled(x - 1f, top + 2f, x + 1f, bottom - 2f, EditorTheme.KEYFRAME_SMOOTH.u32(0.3f))
+        }
+        for (marker in cache.markers) {
+            val x = navX(marker.nanos)
+            list.addRectFilled(x - 1f, top + 2f, x + 1f, bottom - 2f, Widgets.rgbToU32(marker.color, 0.5f))
+        }
+        val left = navX(view.offsetNanos)
+        val right = maxOf(navX(view.offsetNanos + geometry.visibleNanos), left + NAV_HEIGHT)
+        val hovered = drag == DragKind.NONE && ImGui.isWindowHovered() && ImGui.isMouseHoveringRect(geometry.originX, top, geometry.right, bottom)
+        val dragging = drag == DragKind.NAV_THUMB || drag == DragKind.NAV_LEFT || drag == DragKind.NAV_RIGHT
+        list.addRectFilled(left, top + 1f, right, bottom - 1f, EditorTheme.TEXT.u32(if (hovered || dragging) 0.3f else 0.18f), NAV_HEIGHT / 2f)
+        val playX = navX(context.replay?.positionNanos ?: 0L)
+        list.addRectFilled(playX - 1f, top + 1f, playX + 1f, bottom - 1f, EditorTheme.PLAYHEAD.u32, 1f)
+    }
+
+    private fun navX(nanos: Long): Float = geometry.originX + (nanos.toDouble() / duration * geometry.width).toFloat()
+
+    private fun navNanos(x: Float): Long = ((x - geometry.originX) / geometry.width * duration).toLong()
+
+    private fun scrollbar(list: ImDrawList) {
+        val viewport = geometry.tracksBottom - geometry.tracksTop
+        if (geometry.contentHeight <= viewport) return
+        val x2 = geometry.right - EditorFonts.px(2f)
+        val x1 = x2 - SCROLLBAR_WIDTH
+        val fraction = viewport / geometry.contentHeight
+        val thumbHeight = maxOf(EditorFonts.px(18f), viewport * fraction)
+        val thumbTop = geometry.tracksTop + (viewport - thumbHeight) * (geometry.scrollY / (geometry.contentHeight - viewport))
+        val hovered = drag == DragKind.NONE && ImGui.isWindowHovered() && scrollbarHit(ImGui.getMousePosX(), ImGui.getMousePosY())
+        list.addRectFilled(x1, thumbTop, x2, thumbTop + thumbHeight, EditorTheme.TEXT.u32(if (hovered || drag == DragKind.SCROLLBAR) 0.3f else 0.14f), SCROLLBAR_WIDTH / 2f)
+    }
+
+    private fun scrollbarHit(mouseX: Float, mouseY: Float): Boolean {
+        val viewport = geometry.tracksBottom - geometry.tracksTop
+        if (geometry.contentHeight <= viewport) return false
+        val x2 = geometry.right - EditorFonts.px(2f)
+        return mouseX >= x2 - SCROLLBAR_WIDTH - EditorFonts.px(3f) && mouseX <= x2 + EditorFonts.px(2f) && mouseY >= geometry.tracksTop && mouseY < geometry.tracksBottom
+    }
+
+    private fun headers(session: EditorSession, view: TimelineView) {
+        val list = ImGui.getWindowDrawList()
+        val headerX = geometry.headerX
+        val originX = geometry.originX
+        list.addRectFilled(headerX, geometry.rulerTop, originX, geometry.tracksBottom, EditorTheme.LANE_HEADER.u32)
+        addTrackButton(view)
+        val mouseX = ImGui.getMousePosX()
+        val mouseY = ImGui.getMousePosY()
+        val windowHovered = ImGui.isWindowHovered(ImGuiHoveredFlags.AllowWhenBlockedByActiveItem)
+        val held = activeHeader
+        activeHeader = null
+        val menuOpen = ImGui.isPopupOpen("track-menu")
+        ImGui.pushClipRect(headerX, geometry.tracksTop, originX, geometry.tracksBottom, true)
+        try {
+            for (lane in geometry.lanes) {
+                if (!geometry.laneVisible(lane.kind)) continue
+                val top = geometry.laneTop(lane.kind)
+                val height = geometry.laneHeight(lane.kind)
+                val rowHovered = drag == DragKind.NONE && windowHovered && mouseX >= headerX && mouseX < originX && mouseY >= maxOf(top, geometry.tracksTop) && mouseY < minOf(top + height, geometry.tracksBottom)
+                val state = session.project.lane(lane.kind)
+                val selected = context.inspect == InspectTarget.Lane(lane.kind) && session.selection.isEmpty
+                if (selected) list.addRectFilled(headerX, top, originX, top + height, EditorTheme.SELECTION_FILL.u32)
+                else if (rowHovered || reorderKind == lane.kind) list.addRectFilled(headerX, top, originX, top + height, EditorTheme.TEXT.u32(0.04f))
+                list.addRectFilled(headerX + EditorFonts.px(4f), top + EditorFonts.px(5f), headerX + EditorFonts.px(6f), top + height - EditorFonts.px(5f), if (state.muted) EditorTheme.TEXT_DIM.u32(0.4f) else lane.color.u32, 1f)
+                list.addLine(headerX, top + height, originX, top + height, EditorTheme.LANE_LINE.u32, 1f)
+                val iconSize = EditorFonts.px(13f)
+                Icons.draw(list, lane.icon, headerX + EditorFonts.px(12f), top + (lane.rowHeight - iconSize) / 2f, iconSize, if (state.muted) EditorTheme.TEXT_DIM.u32 else lane.color.u32)
+                headerRow(list, session, lane, top, height, rowHovered || menuOpen && contextTrack == lane || held == lane.kind)
+            }
+            reorderKind?.let { kind ->
+                if (geometry.lanes.any { it.kind == kind }) list.addRect(headerX + 1f, geometry.laneTop(kind) + 1f, originX - 1f, geometry.laneTop(kind) + geometry.laneHeight(kind) - 1f, EditorTheme.SELECTION.u32, EditorFonts.px(3f), 0, 1.5f)
+            }
+        } finally {
+            ImGui.popClipRect()
+        }
+        if (trackMenuRequested) {
+            trackMenuRequested = false
+            ImGui.openPopup("track-menu")
+        }
+        list.addLine(originX - 1f, geometry.rulerTop, originX - 1f, geometry.tracksBottom, EditorTheme.BORDER.u32, 1f)
+        list.addLine(headerX, geometry.tracksTop - 1f, originX, geometry.tracksTop - 1f, EditorTheme.BORDER.u32, 1f)
+    }
+
+    private fun headerRow(list: ImDrawList, session: EditorSession, lane: TrackSpec, top: Float, height: Float, rowHovered: Boolean) {
+        val headerX = geometry.headerX
+        val originX = geometry.originX
+        val state = session.project.lane(lane.kind)
+        val size = EditorFonts.px(18f)
+        val buttonY = top + (lane.rowHeight - size) / 2f
+        ImGui.pushID("track-${lane.kind.name}")
+        try {
+            ImGui.setCursorScreenPos(headerX, top)
+            ImGui.setNextItemAllowOverlap()
+            ImGui.invisibleButton("hit", HEADER_WIDTH, height)
+            val hit = ImGui.isItemHovered()
+            if (ImGui.isItemClicked(ImGuiMouseButton.Left)) {
+                if (lane.kind == LaneKind.PLAYERS) gameLanes.togglePlayer(ImGui.getMousePosY() - top, lane.rowHeight)
+                else if (lane.kind in INSPECTABLE) {
+                    session.selection = Selection.NONE
+                    context.selectedEntityId = null
+                    context.inspect = InspectTarget.Lane(lane.kind)
+                }
+            }
+            if (ImGui.isItemClicked(ImGuiMouseButton.Right)) {
+                contextTrack = lane
+                trackMenuRequested = true
+            }
+            if (ImGui.isItemActive()) {
+                if (drag == DragKind.NONE && abs(ImGui.getMouseDragDeltaY(ImGuiMouseButton.Left, 0f)) > EditorFonts.px(6f)) {
+                    drag = DragKind.REORDER
+                    reorderKind = lane.kind
+                }
+                if (drag == DragKind.REORDER && reorderKind == lane.kind) geometry.laneAt(ImGui.getMousePosY())?.let { target ->
+                    if (target.kind != lane.kind) reorder(lane.kind, target.kind)
+                }
+            } else if (drag == DragKind.REORDER && reorderKind == lane.kind) {
+                drag = DragKind.NONE
+                reorderKind = null
+            }
+            if (hit && drag == DragKind.NONE && ImGui.getMousePosX() < originX - EditorFonts.px(70f)) Widgets.hint(
+                when (lane.kind) {
+                    LaneKind.PLAYERS -> "Click a player to expand health, speed and actions   Drag to reorder tracks"
+                    in INSPECTABLE -> "${lane.hint}\nClick to inspect the track   Drag to reorder"
+                    else -> "${lane.hint}\nDrag to reorder tracks"
+                }
             )
             when (lane.kind) {
-                LaneKind.PLAYERS -> gameLanes.drawPlayerHeaders(drawList, y, lane.rowHeight, headerX, originX)
-                LaneKind.WORLD -> gameLanes.drawWorldHeaders(drawList, y, lane.rowHeight, headerX)
-                else -> EditorFonts.with(EditorFonts.smallMedium) {
-                    val textColor = if (muted) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT.u32
-                    drawList.addText(
-                        headerX + EditorFonts.px(31f),
-                        y + (lane.height - ImGui.getFontSize()) / 2f,
-                        textColor,
-                        lane.label
-                    )
+                LaneKind.PLAYERS -> gameLanes.drawPlayerHeaders(list, top, lane.rowHeight, headerX, originX)
+                LaneKind.WORLD -> gameLanes.drawWorldHeaders(list, top, lane.rowHeight, headerX)
+                else -> Unit
+            }
+            val reveal = rowHovered
+            var x = originX - EditorFonts.px(6f) - size
+            var used = EditorFonts.px(6f)
+            if (reveal && lane.kind != LaneKind.PLAYERS && lane.kind != LaneKind.WORLD && lane.kind != LaneKind.EVENTS) {
+                ImGui.setCursorScreenPos(x, buttonY)
+                val tooltip = when (lane.kind) {
+                    LaneKind.CAMERA -> "Add camera keyframe at playhead  Ctrl+K"
+                    LaneKind.VIEW -> "Add view keyframe: keeps the current camera mode and target from here on"
+                    LaneKind.TEXTURE_PACK -> "Add texture pack keyframe: the packs chosen here stay applied until the next keyframe"
+                    LaneKind.TIMELAPSE -> "Add timelapse skip at playhead"
+                    LaneKind.MARKERS -> "Add marker at playhead  M"
+                    LaneKind.MOMENTS -> "Add a moment at the playhead"
+                    LaneKind.CLIPS -> "Save the in to out range as a clip"
+                    else -> "Add ${lane.label.lowercase()} keyframe with the current value"
+                }
+                val enabled = lane.kind != LaneKind.CLIPS || actions.trimmed(session)
+                if (Widgets.iconButton("add", Icon.PLUS, size, tooltip, enabled = enabled, iconScale = 0.55f)) addAtPlayhead(session, lane)
+                if (ImGui.isItemActive()) activeHeader = lane.kind
+                x -= size + EditorFonts.px(2f)
+                used += size + EditorFonts.px(2f)
+            }
+            if (lane.kind == LaneKind.CAMERA && (reveal || state.locked)) {
+                ImGui.setCursorScreenPos(x, buttonY)
+                Widgets.iconToggle("lock", if (state.locked) Icon.LOCK else Icon.UNLOCK, state.locked, size, if (state.locked) "Unlock the camera track" else "Lock the camera track so keyframes cannot be dragged")
+                    ?.let { session.execute(SetLaneState(lane.kind, state.copy(locked = it))) }
+                if (ImGui.isItemActive()) activeHeader = lane.kind
+                x -= size + EditorFonts.px(2f)
+                used += size + EditorFonts.px(2f)
+            }
+            if (lane.muteable && (reveal || state.muted)) {
+                ImGui.setCursorScreenPos(x, buttonY)
+                Widgets.iconToggle("eye", if (state.muted) Icon.EYE_OFF else Icon.EYE, !state.muted, size, if (state.muted) "Enable the ${lane.label.lowercase()} track" else "Disable the ${lane.label.lowercase()} track without deleting its keyframes")
+                    ?.let { session.execute(SetLaneState(lane.kind, state.copy(muted = !it))) }
+                if (ImGui.isItemActive()) activeHeader = lane.kind
+                x -= size + EditorFonts.px(2f)
+                used += size + EditorFonts.px(2f)
+            }
+            if (lane.kind != LaneKind.PLAYERS && lane.kind != LaneKind.WORLD) {
+                val count = trailing(session, lane)
+                EditorFonts.with(EditorFonts.small) {
+                    val countWidth = if (count.isEmpty()) 0f else Widgets.textWidth(count)
+                    if (count.isNotEmpty()) list.addText(x + size - countWidth - EditorFonts.px(2f), top + (lane.rowHeight - ImGui.getFontSize()) / 2f, EditorTheme.TEXT_DIM.u32, count)
+                    used += countWidth + EditorFonts.px(6f)
+                }
+                EditorFonts.with(EditorFonts.smallMedium) {
+                    val labelX = headerX + EditorFonts.px(31f)
+                    val available = originX - used - labelX - EditorFonts.px(4f)
+                    list.addText(labelX, top + (lane.rowHeight - ImGui.getFontSize()) / 2f, if (state.muted) EditorTheme.TEXT_DIM.u32 else EditorTheme.TEXT.u32, Widgets.clip(lane.label, available))
+                }
+                if (lane.kind == LaneKind.EVENTS && !session.events.complete) {
+                    val barY = top + height - EditorFonts.px(4f)
+                    val barLeft = headerX + EditorFonts.px(12f)
+                    val barRight = originX - EditorFonts.px(12f)
+                    list.addRectFilled(barLeft, barY, barRight, barY + EditorFonts.px(2f), EditorTheme.CONTROL.u32)
+                    list.addRectFilled(barLeft, barY, barLeft + (barRight - barLeft) * session.events.progress.toFloat(), barY + EditorFonts.px(2f), EditorTheme.ACCENT_TEXT.u32)
                 }
             }
-            y += lane.height
-        }
-        drawList.addLine(originX - 1f, originY, originX - 1f, tracksBottom(), EditorTheme.BORDER.u32, 1f)
-    }
-
-    private fun headerWidgets(session: EditorSession) {
-        val project = session.project
-        for (lane in lanes) {
-            val top = laneTop(lane.kind)
-            val size = EditorFonts.px(18f)
-            val y = top + (lane.height - size) / 2f
-            var x = originX - EditorFonts.px(8f) - size
-            val reveal = drag == DragKind.NONE && ImGui.isWindowHovered() && ImGui.isMouseHoveringRect(headerX, top, originX, top + lane.height)
-            ImGui.pushID("lane-${lane.kind.name}")
-            try {
-                when (lane.kind) {
-                    LaneKind.CAMERA -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Add camera keyframe at playhead (Ctrl+K)",
-                                iconScale = 0.55f
-                            )
-                        ) session.keyframeAtPlayhead(context.host.camera.currentPose())
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        val state = project.lane(LaneKind.CAMERA)
-                        if (reveal || state.locked) Widgets.iconToggle(
-                            "lock",
-                            if (state.locked) Icon.LOCK else Icon.UNLOCK,
-                            state.locked,
-                            size,
-                            if (state.locked) "Unlock camera lane" else "Lock camera lane (prevents dragging)"
-                        )?.let { session.execute(SetLaneState(LaneKind.CAMERA, state.copy(locked = it))) }
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal || state.muted) Widgets.iconToggle(
-                            "eye",
-                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
-                            !state.muted,
-                            size,
-                            if (state.muted) "Enable camera path (camera follows keyframes)" else "Disable camera path"
-                        )?.let { session.execute(SetLaneState(LaneKind.CAMERA, state.copy(muted = !it))) }
-                        x -= 4f
-                        EditorFonts.with(EditorFonts.small) {
-                            val label = "${keyTimes.size}"
-                            val labelWidth = Widgets.textWidth(label)
-                            ImGui.getWindowDrawList().addText(
-                                x - labelWidth,
-                                top + (lane.height - ImGui.getFontSize()) / 2f,
-                                EditorTheme.TEXT_DIM.u32,
-                                label
-                            )
-                        }
-                    }
-
-                    LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
-                        val valueLane = ValueLane.entries.first { it.kind == lane.kind }
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                VALUE_ADD_TOOLTIPS[valueLane] ?: "Add keyframe",
-                                iconScale = 0.55f
-                            )
-                        ) addValueKeyframe(session, valueLane, session.playheadNanos)
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        val state = project.lane(lane.kind)
-                        if (reveal || state.muted) Widgets.iconToggle(
-                            "eye",
-                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
-                            !state.muted,
-                            size,
-                            if (state.muted) "Enable ${valueLane.label.lowercase()} lane" else "Disable ${valueLane.label.lowercase()} lane"
-                        )?.let { session.execute(SetLaneState(lane.kind, state.copy(muted = !it))) }
-                    }
-
-                    LaneKind.VIEW -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Add view keyframe: switches to the current camera mode and target from here on",
-                                iconScale = 0.55f
-                            )
-                        ) addViewKeyframe(session, session.playheadNanos)
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        val state = project.lane(LaneKind.VIEW)
-                        if (reveal || state.muted) Widgets.iconToggle(
-                            "eye",
-                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
-                            !state.muted,
-                            size,
-                            if (state.muted) "Enable view switches" else "Disable view switches"
-                        )?.let { session.execute(SetLaneState(LaneKind.VIEW, state.copy(muted = !it))) }
-                    }
-
-                    LaneKind.TEXTURE_PACK -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Add texture pack keyframe: the packs chosen here stay applied until the next keyframe",
-                                iconScale = 0.55f
-                            )
-                        ) addPackKeyframe(session, session.playheadNanos)
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        val state = project.lane(LaneKind.TEXTURE_PACK)
-                        if (reveal || state.muted) Widgets.iconToggle(
-                            "eye",
-                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
-                            !state.muted,
-                            size,
-                            if (state.muted) "Enable texture pack switches" else "Disable texture pack switches"
-                        )?.let { session.execute(SetLaneState(LaneKind.TEXTURE_PACK, state.copy(muted = !it))) }
-                    }
-
-                    LaneKind.CLIPS -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Create clip from in/out points",
-                                iconScale = 0.55f
-                            )
-                        ) clipFromInOut(session)
-                    }
-
-                    LaneKind.MARKERS -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Add marker at playhead (M)",
-                                iconScale = 0.55f
-                            )
-                        ) addMarker(session, session.playheadNanos)
-                    }
-
-                    LaneKind.TIMELAPSE -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Add timelapse skip at playhead",
-                                iconScale = 0.55f
-                            )
-                        ) addTimelapse(session, session.playheadNanos)
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        val state = project.lane(LaneKind.TIMELAPSE)
-                        if (reveal || state.muted) Widgets.iconToggle(
-                            "eye",
-                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
-                            !state.muted,
-                            size,
-                            if (state.muted) "Enable timelapse skips" else "Disable timelapse skips"
-                        )?.let { session.execute(SetLaneState(LaneKind.TIMELAPSE, state.copy(muted = !it))) }
-                    }
-
-                    LaneKind.POSE -> {
-                        val entity = context.selectedEntityId?.takeIf { PoseTools.poseable(session, it) }
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                if (entity == null) "Select a player to key its pose" else "Key the selected entity's pose at the playhead",
-                                enabled = entity != null,
-                                iconScale = 0.55f
-                            ) && entity != null
-                        ) PoseTools.keyHere(session, entity)
-                        x -= size + 2f
-                        ImGui.setCursorScreenPos(x, y)
-                        val state = project.lane(LaneKind.POSE)
-                        if (reveal || state.muted) Widgets.iconToggle(
-                            "eye",
-                            if (state.muted) Icon.EYE_OFF else Icon.EYE,
-                            !state.muted,
-                            size,
-                            if (state.muted) "Enable poses" else "Disable poses"
-                        )?.let { session.execute(SetLaneState(LaneKind.POSE, state.copy(muted = !it))) }
-                    }
-
-                    LaneKind.MOMENTS -> {
-                        ImGui.setCursorScreenPos(x, y)
-                        if (reveal && Widgets.iconButton(
-                                "add",
-                                Icon.PLUS,
-                                size,
-                                "Add a moment at the playhead",
-                                iconScale = 0.55f
-                            )
-                        ) gameLanes.addManual(session, session.playheadNanos)
-                        x -= size + 2f
-                        EditorFonts.with(EditorFonts.small) {
-                            val kept = project.moments.size
-                            val detected = gameLanes.moments(session).size - kept
-                            val label = if (detected > 0) "$kept + $detected" else "$kept"
-                            val labelWidth = Widgets.textWidth(label)
-                            ImGui.getWindowDrawList().addText(
-                                x - labelWidth,
-                                top + (lane.height - ImGui.getFontSize()) / 2f,
-                                EditorTheme.TEXT_DIM.u32,
-                                label
-                            )
-                        }
-                    }
-
-                    LaneKind.EVENTS -> {
-                        val events = session.events
-                        EditorFonts.with(EditorFonts.small) {
-                            val label =
-                                if (events.complete) "${events.events.size}" else "${(events.progress * 100).toInt()}%"
-                            val labelWidth = Widgets.textWidth(label)
-                            ImGui.getWindowDrawList().addText(
-                                originX - 10f - labelWidth,
-                                top + (lane.height - ImGui.getFontSize()) / 2f,
-                                EditorTheme.TEXT_DIM.u32,
-                                label
-                            )
-                        }
-                        if (!events.complete) {
-                            val barY = top + lane.height - 4f
-                            ImGui.getWindowDrawList()
-                                .addRectFilled(headerX + 12f, barY, originX - 12f, barY + 2f, EditorTheme.CONTROL.u32)
-                            ImGui.getWindowDrawList().addRectFilled(
-                                headerX + 12f,
-                                barY,
-                                headerX + 12f + (originX - 24f - headerX) * events.progress.toFloat(),
-                                barY + 2f,
-                                EditorTheme.ACCENT_TEXT.u32
-                            )
-                        }
-                    }
-
-                    else -> Unit
-                }
-            } finally {
-                ImGui.popID()
-            }
+        } finally {
+            ImGui.popID()
         }
     }
 
-    private var reorderLane: LaneKind? = null
+    private fun trailing(session: EditorSession, lane: TrackSpec): String = when (lane.kind) {
+        LaneKind.EVENTS -> session.events.let { if (it.complete) "${it.events.size}" else "${(it.progress * 100).toInt()}%" }
+        LaneKind.MOMENTS -> {
+            val kept = session.project.moments.size
+            val detected = gameLanes.moments(session).size - kept
+            if (detected > 0) "$kept + $detected" else "$kept"
+        }
 
-    private fun headerMenus(session: EditorSession, view: TimelineView) {
-        for (lane in lanes) {
-            val top = laneTop(lane.kind)
-            ImGui.setCursorScreenPos(headerX, top)
-            ImGui.pushID("hdr-${lane.kind.name}")
-            try {
-                ImGui.invisibleButton("hit", HEADER_WIDTH - 72f, lane.height)
-                if (ImGui.isItemHovered() && ImGui.isMouseClicked(ImGuiMouseButton.Right)) contextHeader = lane.kind
-                if (lane.kind == LaneKind.PLAYERS && ImGui.isItemClicked(ImGuiMouseButton.Left)) gameLanes.togglePlayer(
-                    ImGui.getMousePosY() - top,
-                    lane.rowHeight
-                )
-                if (ImGui.isItemActive()) {
-                    reorderLane = lane.kind
-                    laneAt(ImGui.getMousePosY())?.kind?.let { target ->
-                        if (target != lane.kind) reorderLanes(lane.kind, target)
-                    }
-                }
-                if (ImGui.isItemDeactivated()) reorderLane = null
-                if (reorderLane == lane.kind) ImGui.getWindowDrawList().addRect(
-                    headerX + 1f, top + 1f, originX - 1f, top + lane.height - 1f, EditorTheme.SELECTION.u32, 2f
-                )
-                if (ImGui.beginPopupContextItem("lane-menu")) {
-                    laneMenu(session, view, lane)
-                    ImGui.endPopup()
-                }
-            } finally {
-                ImGui.popID()
-            }
+        else -> cache.count(lane.kind).let { if (it == 0) "" else "$it" }
+    }
+
+    private fun addAtPlayhead(session: EditorSession, lane: TrackSpec) {
+        val nanos = session.playheadNanos
+        when (lane.kind) {
+            LaneKind.CAMERA -> actions.addCameraKeyframe(session, nanos)
+            LaneKind.VIEW -> actions.addViewKeyframe(session, nanos)
+            LaneKind.TEXTURE_PACK -> actions.addPackKeyframe(session, nanos)
+            LaneKind.TIMELAPSE -> actions.addTimelapse(session, nanos)
+            LaneKind.MARKERS -> actions.addMarker(session, nanos)
+            LaneKind.MOMENTS -> gameLanes.addManual(session, nanos)
+            LaneKind.CLIPS -> actions.clipFromInOut(session)
+            else -> lane.valueLane?.let { actions.addValueKeyframe(session, it, nanos) }
         }
     }
 
-    private fun reorderLanes(from: LaneKind, to: LaneKind) {
+    private fun addTrackButton(view: TimelineView) {
+        val hidden = TrackSpec.ALL.filter { !visible(it, view) }
+        val height = EditorFonts.px(20f)
+        ImGui.setCursorScreenPos(geometry.headerX + EditorFonts.px(6f), geometry.rulerTop + (RULER_HEIGHT - height) / 2f)
+        if (Widgets.iconLabelButton(
+                "add-track",
+                Icon.PLUS,
+                "Track",
+                0f,
+                Widgets.ButtonStyle.GHOST,
+                hidden.isNotEmpty(),
+                if (hidden.isEmpty()) "Every track is shown" else "Add a track: speed ramps, FOV, focus, time of day, view switches, texture packs, players, world and moments",
+                height
+            )
+        ) ImGui.openPopup("add-track")
+        if (Widgets.beginPopup("add-track")) {
+            menus.addTrack(view, hidden)
+            Widgets.endPopup()
+        }
+    }
+
+    private fun reorder(from: LaneKind, to: LaneKind) {
         val order = context.ui.laneOrder.toMutableList()
         val fromIndex = order.indexOf(from)
         val toIndex = order.indexOf(to)
@@ -685,1511 +680,243 @@ class TimelinePanel(private val context: EditorContext) :
         context.ui.laneOrder = order
     }
 
-    private fun laneMenu(session: EditorSession, view: TimelineView, lane: Lane) {
-        val state = session.project.lane(lane.kind)
-        Widgets.mutedText("${lane.label} track")
-        ImGui.separator()
-        when (lane.kind) {
-            LaneKind.CAMERA -> {
-                if (Menus.item(
-                        "Add keyframe at playhead",
-                        "Ctrl+K"
-                    )
-                ) session.keyframeAtPlayhead(context.host.camera.currentPose())
-                if (Menus.item(if (state.muted) "Enable camera path" else "Disable camera path")) session.execute(
-                    SetLaneState(lane.kind, state.copy(muted = !state.muted))
-                )
-                if (Menus.item(if (state.locked) "Unlock" else "Lock")) session.execute(
-                    SetLaneState(
-                        lane.kind,
-                        state.copy(locked = !state.locked)
-                    )
-                )
-                if (Menus.item("Select all keyframes", "", false, keyTimes.isNotEmpty())) session.selection =
-                    Selection(keyframeTimes = keyTimes.toSet())
-                if (ImGui.beginMenu("Path tools", keyTimes.size >= 2)) {
-                    val path = session.project.camera
-                    if (Menus.item("Reverse direction")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.reversed(path),
-                            "Reverse camera path"
-                        )
-                    )
-                    Widgets.tooltip("Play the same path backwards: the last keyframe becomes the first")
-                    if (Menus.item("Fit to in/out range")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.retimed(
-                                path,
-                                inPoint(session),
-                                outPoint(session)
-                            ), "Fit camera path to in/out"
-                        )
-                    )
-                    Widgets.tooltip("Stretch or squeeze the keyframes so the path starts at the in point and ends at the out point")
-                    if (Menus.item("Start at playhead")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.shifted(
-                                path,
-                                session.playheadNanos - keyTimes.first()
-                            ), "Shift camera path"
-                        )
-                    )
-                    if (Menus.item("Space keyframes evenly")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.evenlySpaced(
-                                path
-                            ), "Space keyframes evenly"
-                        )
-                    )
-                    if (Menus.item("Time by distance (constant speed)")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.byDistance(
-                                path
-                            ), "Retime camera path by distance"
-                        )
-                    )
-                    Widgets.tooltip("Re-times keyframes so the camera moves at a constant speed along the path")
-                    ImGui.separator()
-                    if (Menus.item("Simplify (remove redundant keyframes)")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.simplified(path, 0.35),
-                            "Simplify camera path"
-                        )
-                    )
-                    Widgets.tooltip("Drops keyframes that sit within a third of a block of the straight line between their neighbours; great after recording a flight")
-                    if (Menus.item("Mirror east-west")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.mirrored(
-                                path,
-                                0
-                            ), "Mirror camera path"
-                        )
-                    )
-                    if (Menus.item("Mirror north-south")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.mirrored(
-                                path,
-                                2
-                            ), "Mirror camera path"
-                        )
-                    )
-                    ImGui.separator()
-                    if (Menus.item("Face direction of travel")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.facingTravel(
-                                path
-                            ), "Face camera path along travel"
-                        )
-                    )
-                    Widgets.tooltip("Points every keyframe toward the next one, like a fly-through")
-                    if (Menus.item("Level the horizon (roll 0)")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.levelled(
-                                path
-                            ), "Level camera path"
-                        )
-                    )
-                    if (Menus.item("Use current FOV everywhere")) session.execute(
-                        ReplaceCameraPath(
-                            PathTools.withUniformFov(
-                                path,
-                                context.host.camera.currentPose().fov
-                            ), "Set camera path FOV"
-                        )
-                    )
-                    ImGui.separator()
-                    for (mode in SegmentMode.entries) {
-                        if (Menus.item("All ${mode.label.lowercase()}")) session.execute(
-                            ReplaceCameraPath(
-                                PathTools.withUniformMode(
-                                    path,
-                                    mode
-                                ), "Set all keyframes to ${mode.label.lowercase()}"
-                            )
-                        )
-                    }
-                    ImGui.endMenu()
-                }
-                ImGui.separator()
-                if (Menus.item("Clear camera path", "", false, keyTimes.isNotEmpty())) {
-                    session.execute(ClearCameraPath())
-                    session.selection = Selection.NONE
-                }
-            }
-
-            LaneKind.VIEW -> {
-                if (Menus.item("Add view keyframe at playhead")) addViewKeyframe(session, session.playheadNanos)
-                if (Menus.item(if (state.muted) "Enable" else "Disable")) session.execute(
-                    SetLaneState(
-                        lane.kind,
-                        state.copy(muted = !state.muted)
-                    )
-                )
-                ImGui.separator()
-                if (viewKeys.isEmpty()) {
-                    if (Menus.item("Hide track")) view.shownLanes.remove(lane.kind)
-                } else if (Menus.item("Clear and hide track")) {
-                    session.execute(RemoveViewKeyframes(viewKeys.map { it.timeNanos }.toSet()))
-                    session.selection = Selection.NONE
-                    view.shownLanes.remove(lane.kind)
-                }
-            }
-
-            LaneKind.TEXTURE_PACK -> {
-                if (Menus.item("Add texture pack keyframe at playhead")) addPackKeyframe(session, session.playheadNanos)
-                if (Menus.item(if (state.muted) "Enable" else "Disable")) session.execute(
-                    SetLaneState(lane.kind, state.copy(muted = !state.muted))
-                )
-                ImGui.separator()
-                if (packKeys.isEmpty()) {
-                    if (Menus.item("Hide track")) view.shownLanes.remove(lane.kind)
-                } else if (Menus.item("Clear and hide track")) {
-                    session.execute(RemovePackKeyframes(packKeys.map { it.timeNanos }.toSet()))
-                    session.selection = Selection.NONE
-                    view.shownLanes.remove(lane.kind)
-                }
-            }
-
-            LaneKind.CLIPS -> if (Menus.item("Clip from in/out")) clipFromInOut(session)
-            LaneKind.MARKERS -> if (Menus.item("Add marker at playhead", "M")) addMarker(
-                session,
-                session.playheadNanos
-            )
-
-            LaneKind.TIMELAPSE -> {
-                if (Menus.item("Add timelapse skip at playhead")) addTimelapse(session, session.playheadNanos)
-                if (Menus.item(if (state.muted) "Enable" else "Disable")) session.execute(
-                    SetLaneState(lane.kind, state.copy(muted = !state.muted))
-                )
-                ImGui.separator()
-                if (timelapses.isEmpty()) {
-                    if (Menus.item("Hide track")) view.shownLanes.remove(lane.kind)
-                } else if (Menus.item("Clear and hide track")) {
-                    timelapses.forEach { session.execute(RemoveTimelapse(it.id)) }
-                    session.selection = Selection.NONE
-                    view.shownLanes.remove(lane.kind)
-                }
-            }
-
-            LaneKind.POSE -> {
-                if (Menus.item(if (state.muted) "Enable" else "Disable")) session.execute(
-                    SetLaneState(lane.kind, state.copy(muted = !state.muted))
-                )
-                ImGui.separator()
-                if (poseKeys.isEmpty()) {
-                    if (Menus.item("Hide track")) view.shownLanes.remove(lane.kind)
-                } else if (Menus.item("Clear and hide track")) {
-                    for ((id, track) in session.project.poses.toMap()) session.execute(
-                        RemovePoseKeyframes(
-                            id,
-                            track.keyframes.map { it.timeNanos }.toSet()
-                        )
-                    )
-                    context.selectedBodyPart = null
-                    view.shownLanes.remove(lane.kind)
-                }
-            }
-
-            LaneKind.EVENTS -> Widgets.smallText(
-                "Recorded events: chat, deaths, damage, explosions",
-                EditorTheme.TEXT_DIM.u32
-            )
-
-            LaneKind.PLAYERS -> {
-                gameLanes.playersLaneMenu()
-                ImGui.separator()
-                if (Menus.item("Hide track")) hideGameLane(view, lane.kind)
-            }
-
-            LaneKind.WORLD -> {
-                gameLanes.worldLaneMenu()
-                ImGui.separator()
-                if (Menus.item("Hide track")) hideGameLane(view, lane.kind)
-            }
-
-            LaneKind.MOMENTS -> {
-                gameLanes.momentsLaneMenu(session)
-                ImGui.separator()
-                if (Menus.item("Hide track")) hideGameLane(view, lane.kind)
-            }
-
-
-            else -> {
-                val valueLane = ValueLane.entries.firstOrNull { it.kind == lane.kind } ?: return
-                val keys = valueKeys[valueLane] ?: emptyList()
-                if (Menus.item("Add keyframe at playhead")) addValueKeyframe(
-                    session,
-                    valueLane,
-                    session.playheadNanos
-                )
-                if (Menus.item(if (state.muted) "Enable" else "Disable")) session.execute(
-                    SetLaneState(
-                        lane.kind,
-                        state.copy(muted = !state.muted)
-                    )
-                )
-                if (Menus.item("Select all keyframes", "", false, keys.isNotEmpty())) session.selection =
-                    Selection(valueKeys = keys.map { ValueKey(valueLane, it.timeNanos) }.toSet())
-                ImGui.separator()
-                if (keys.isEmpty()) {
-                    if (Menus.item("Hide track")) view.shownLanes.remove(lane.kind)
-                } else if (Menus.item("Clear and hide track")) {
-                    session.execute(RemoveValueKeyframes(keys.map { ValueKey(valueLane, it.timeNanos) }.toSet()))
-                    session.selection = Selection.NONE
-                    view.shownLanes.remove(lane.kind)
-                }
-                VALUE_HINTS[valueLane]?.let {
-                    ImGui.separator()
-                    Widgets.smallText(it, EditorTheme.TEXT_DIM.u32)
-                }
-            }
-        }
-    }
-
-    private fun hideGameLane(view: TimelineView, kind: LaneKind) {
-        view.shownLanes.remove(kind)
-        view.hiddenLanes.add(kind)
-    }
-
-    private fun addTrackButton(view: TimelineView) {
-        val hiddenLanes = allLanes.filter { optional(it.kind) && lanes.none { shown -> shown.kind == it.kind } }
-        val size = EditorFonts.px(18f)
-        ImGui.setCursorScreenPos(originX - EditorFonts.px(8f) - size, originY + (RULER_HEIGHT - size) / 2f)
-        if (Widgets.iconButton(
-                "add-track",
-                Icon.PLUS,
-                size,
-                if (hiddenLanes.isEmpty()) "All tracks are shown" else "Show a track: speed ramps, FOV, focus, time of day, shake, view switches, texture packs or freezes",
-                enabled = hiddenLanes.isNotEmpty(),
-                iconScale = 0.6f
-            )
-        ) ImGui.openPopup("add-track")
-        if (Widgets.beginPopup("add-track")) {
-            Widgets.mutedText("Show track")
-            ImGui.separator()
-            for (lane in hiddenLanes) {
-                val hint = ValueLane.entries.firstOrNull { it.kind == lane.kind }?.let { VALUE_HINTS[it] }
-                    ?: when (lane.kind) {
-                        LaneKind.PLAYERS -> "One row per player with presence, health, kills and deaths."
-                        LaneKind.WORLD -> "Block changes, explosions, projectiles, sounds and dimension changes."
-                        LaneKind.MOMENTS -> "Detected and kept moments: kills, clutches, fights, escapes."
-                        LaneKind.TEXTURE_PACK -> "Texture pack keyframes switch resource packs over time."
-                        else -> "View keyframes switch between camera modes and targets over time."
-                    }
-                if (Menus.item(lane.label)) {
-                    view.shownLanes.add(lane.kind)
-                    view.hiddenLanes.remove(lane.kind)
-                }
-                Widgets.tooltip(hint)
-            }
-            Widgets.endPopup()
-        }
-    }
-
-    private fun drawLaneBackgrounds(drawList: ImDrawList) {
-        val mouseY = ImGui.getMousePosY()
-        val mouseX = ImGui.getMousePosX()
-        var y = originY + RULER_HEIGHT
-        for ((index, lane) in lanes.withIndex()) {
-            val base = if (index % 2 == 0) EditorTheme.LANE_A else EditorTheme.LANE_B
-            drawList.addRectFilled(originX, y, originX + width, y + lane.height, base.u32)
-            if (drag == DragKind.NONE && mouseX >= originX && mouseY >= y && mouseY < y + lane.height && ImGui.isWindowHovered()) {
-                drawList.addRectFilled(originX, y, originX + width, y + lane.height, EditorTheme.BORDER_SOFT.u32(0.03f))
-            }
-            drawList.addLine(originX, y + lane.height, originX + width, y + lane.height, EditorTheme.LANE_LINE.u32, 1f)
-            y += lane.height
-        }
-    }
-
-    private fun inPoint(session: EditorSession): Long = session.project.inPointNanos.coerceIn(0L, duration)
-
-    private fun outPoint(session: EditorSession): Long =
-        if (session.project.outPointNanos > 0L) session.project.outPointNanos.coerceIn(0L, duration) else duration
-
-    private fun drawWorkArea(drawList: ImDrawList, session: EditorSession) {
-        val left = xAt(if (drag == DragKind.IN_POINT) dragCurrentNanos else inPoint(session))
-        val right = xAt(if (drag == DragKind.OUT_POINT) dragCurrentNanos else outPoint(session))
-        val bottom = tracksBottom()
-        drawList.addRectFilled(
-            maxOf(originX, left),
-            originY + RULER_HEIGHT,
-            minOf(originX + width, right),
-            bottom,
-            EditorTheme.WORK_AREA.u32
-        )
-        if (left > originX) drawList.addRectFilled(
-            originX,
-            originY + RULER_HEIGHT,
-            minOf(left, originX + width),
-            bottom,
-            EditorTheme.APP_BG.u32(0.35f)
-        )
-        if (right < originX + width) drawList.addRectFilled(
-            maxOf(right, originX),
-            originY + RULER_HEIGHT,
-            originX + width,
-            bottom,
-            EditorTheme.APP_BG.u32(0.35f)
-        )
-    }
-
-    private fun drawInOutHandles(drawList: ImDrawList, session: EditorSession) {
-        val inNanos = if (drag == DragKind.IN_POINT) dragCurrentNanos else inPoint(session)
-        val outNanos = if (drag == DragKind.OUT_POINT) dragCurrentNanos else outPoint(session)
-        val bottom = originY + RULER_HEIGHT + tracksHeight
-        val trimmed = inNanos > 0L || outNanos < duration
-        val color = if (trimmed) EditorTheme.SELECTION else EditorTheme.IN_OUT
-        val top = originY + RULER_HEIGHT - HANDLE_HEIGHT
-        val left = xAt(inNanos)
-        val right = xAt(outNanos)
-        if (trimmed) {
-            val x1 = left.coerceIn(originX, originX + width)
-            val x2 = right.coerceIn(originX, originX + width)
-            if (x2 > x1) drawList.addRect(x1, top, x2, bottom, color.u32(0.5f), 0f, 0, 1f)
-        }
-        if (left >= originX - 1f && left <= originX + width + 1f) {
-            drawList.addLine(left, top, left, bottom, color.u32(0.7f), 1f)
-            drawList.addRectFilled(left, top, left + HANDLE_WIDTH, originY + RULER_HEIGHT, color.u32, 2f)
-            drawList.addRectFilled(left + EditorFonts.px(3f), top + EditorFonts.px(3f), left + HANDLE_WIDTH - EditorFonts.px(3f), originY + RULER_HEIGHT - EditorFonts.px(3f), EditorTheme.PANEL_SUNKEN.u32(0.6f), 1f)
-        }
-        if (right >= originX - 1f && right <= originX + width + 1f) {
-            drawList.addLine(right, top, right, bottom, color.u32(0.7f), 1f)
-            drawList.addRectFilled(right - HANDLE_WIDTH, top, right, originY + RULER_HEIGHT, color.u32, 2f)
-            drawList.addRectFilled(right - HANDLE_WIDTH + EditorFonts.px(3f), top + EditorFonts.px(3f), right - EditorFonts.px(3f), originY + RULER_HEIGHT - EditorFonts.px(3f), EditorTheme.PANEL_SUNKEN.u32(0.6f), 1f)
-        }
-    }
-
-    private fun drawRuler(drawList: ImDrawList, view: TimelineView) {
-        drawList.addRectFilled(originX, originY, originX + width, originY + RULER_HEIGHT, EditorTheme.RULER_BG.u32)
-        drawSegments(drawList)
-        val step = rulerStep(view)
-        val minor = step / MINOR_DIVISIONS
-        var tick = (view.offsetNanos / minor) * minor
-        val end = view.offsetNanos + visibleNanos
-        val labelFont = EditorFonts.small
-        val fontSize = 13
-        while (tick <= end) {
-            val x = xAt(tick)
-            if (x >= originX && x <= originX + width) {
-                val major = tick % step == 0L
-                val height = if (major) 9f else 4f
-                drawList.addLine(
-                    x,
-                    originY + RULER_HEIGHT - height,
-                    x,
-                    originY + RULER_HEIGHT,
-                    if (major) EditorTheme.TEXT_MUTED.u32 else EditorTheme.TEXT_DIM.u32(0.6f),
-                    1f
-                )
-                if (major) drawList.addText(
-                    labelFont,
-                    fontSize,
-                    x + 4f,
-                    originY + 3f,
-                    EditorTheme.TEXT_MUTED.u32,
-                    rulerLabel(tick, step)
-                )
-                if (major) drawList.addLine(
-                    x,
-                    originY + RULER_HEIGHT,
-                    x,
-                    tracksBottom(),
-                    EditorTheme.LANE_LINE.u32(0.18f),
-                    1f
-                )
-            }
-            tick += minor
-        }
-        drawList.addLine(
-            originX,
-            originY + RULER_HEIGHT,
-            originX + width,
-            originY + RULER_HEIGHT,
-            EditorTheme.BORDER.u32,
-            1f
-        )
-    }
-
-    private fun drawSegments(drawList: ImDrawList) {
-        val project = context.session?.project ?: return
-        if (!project.isSequence) return
-        val spans = project.segmentSpans()
-        val bandTop = tracksBottom() - EditorFonts.px(4f)
-        for ((index, span) in spans.withIndex()) {
-            val x1 = xAt(span.first).coerceIn(originX, originX + width)
-            val x2 = xAt(span.second).coerceIn(originX, originX + width)
-            if (x2 <= x1) continue
-            val color = SEGMENT_COLORS[index % SEGMENT_COLORS.size]
-            drawList.addRectFilled(x1, originY + RULER_HEIGHT, x2, tracksBottom(), color.u32(0.05f))
-            drawList.addRectFilled(x1, bandTop, x2, tracksBottom(), color.u32(0.7f))
-            drawList.addLine(x1, originY, x1, tracksBottom(), color.u32(0.5f), 1f)
-            val label = "${index + 1}  " + project.segments[index].gameplay.fileName.toString().substringBeforeLast('.')
-            EditorFonts.with(EditorFonts.small) {
-                if (Widgets.textWidth(label) + 12f < x2 - x1) drawList.addText(
-                    x1 + 6f,
-                    bandTop - ImGui.getFontSize() - 2f,
-                    color.u32(0.9f),
-                    label
-                )
-            }
-        }
-    }
-
-    private fun rulerLabel(nanos: Long, step: Long): String {
-        val clock = TimeFormat.clock(nanos)
-        return if (step < Nanos.PER_SECOND) clock else clock.substringBefore('.')
-    }
-
-    private fun drawCameraLane(drawList: ImDrawList, session: EditorSession, nowNanos: Long) {
-        val top = laneTop(LaneKind.CAMERA)
-        val centerY = top + laneHeight(LaneKind.CAMERA) / 2f
-        val selection = session.selection.keyframeTimes
-        val muted = session.project.lane(LaneKind.CAMERA).muted
-        val alpha = if (muted) 0.4f else 1f
-        for (index in 0 until keyframes.size - 1) {
-            val from = keyframes[index]
-            val to = keyframes[index + 1]
-            val x1 = xAt(displayTime(from.timeNanos, selection))
-            val x2 = xAt(displayTime(to.timeNanos, selection))
-            if (x2 < originX || x1 > originX + width) continue
-            val color = modeColor(from.mode).u32(0.7f * alpha)
-            if (from.mode == SegmentMode.HOLD || from.easing.isLinear || x2 - x1 < EASE_GLYPH_MIN_WIDTH) {
-                drawList.addLine(x1, centerY, x2, centerY, color, 2f)
-            } else {
-                val rise = laneHeight(LaneKind.CAMERA) * 0.28f
-                val steps = minOf(48, ((x2 - x1) / 4f).toInt().coerceAtLeast(8))
-                var previousX = x1
-                var previousY = centerY + rise
-                for (step in 1..steps) {
-                    val t = step.toDouble() / steps
-                    val x = x1 + (x2 - x1) * t.toFloat()
-                    val y = centerY + rise - rise * 2f * from.easing.clamped(t).toFloat()
-                    drawList.addLine(previousX, previousY, x, y, color, 2f)
-                    previousX = x
-                    previousY = y
-                }
-            }
-        }
-        val playhead = session.playheadNanos
-        val pulse = (0.65f + 0.35f * Math.sin(nowNanos / 1.6e8).toFloat())
-        for (frame in keyframes) {
-            val selected = frame.timeNanos in selection
-            val x = xAt(displayTime(frame.timeNanos, selection))
-            if (x < originX - KEY_RADIUS || x > originX + width + KEY_RADIUS) continue
-            val radius = if (selected) KEY_RADIUS + 1.5f else KEY_RADIUS
-            val atPlayhead = Math.abs(frame.timeNanos - playhead) < Nanos.PER_MILLI * 5
-            val fill = modeColor(frame.mode).u32(if (atPlayhead) pulse * alpha else alpha)
-            Icons.diamond(drawList, x, centerY, radius, fill, true)
-            Icons.diamond(
-                drawList,
-                x,
-                centerY,
-                radius,
-                if (selected) EditorTheme.SELECTION.u32 else EditorTheme.APP_BG.u32(0.8f),
-                false,
-                if (selected) 2f else 1f
-            )
-            if (dragDuplicate && drag == DragKind.KEYFRAMES && frame.timeNanos in dragTimes) {
-                Icons.diamond(
-                    drawList,
-                    xAt(frame.timeNanos),
-                    centerY,
-                    KEY_RADIUS,
-                    modeColor(frame.mode).u32(0.35f),
-                    true
-                )
-            }
-        }
-    }
-
-    private fun displayTime(nanos: Long, selection: Set<Long>): Long =
-        if (drag == DragKind.KEYFRAMES && !dragDuplicate && nanos in dragTimes) maxOf(
-            0L,
-            nanos + dragDelta
-        ) else if (drag == DragKind.KEYFRAMES && dragDuplicate && nanos in dragTimes) maxOf(
-            0L,
-            nanos + dragDelta
-        ) else nanos
-
-    private fun drawValueLane(drawList: ImDrawList, session: EditorSession, lane: ValueLane) {
-        val top = laneTop(lane.kind)
-        val height = laneHeight(lane.kind)
-        val muted = session.project.lane(lane.kind).muted
-        val alpha = if (muted) 0.4f else 1f
-        val track = session.project.valueTrack(lane)
-        val keys = valueKeys[lane] ?: emptyList()
-        val selection = session.selection.valueTimes(lane)
-        val color = laneColor(lane.kind)
-        if (keys.size >= 2) {
-            val first = keys.first().timeNanos
-            val last = keys.last().timeNanos
-            val startX = maxOf(originX, xAt(first))
-            val endX = minOf(originX + width, xAt(last))
-            var x = startX
-            var previousY = Float.NaN
-            while (x <= endX) {
-                val value = track.valueAt(nanosAt(x)) ?: lane.default
-                val y = valueY(lane, top, height, value)
-                if (!previousY.isNaN()) drawList.addLine(x - CURVE_STEP, previousY, x, y, color.u32(0.8f * alpha), 1.5f)
-                previousY = y
-                x += CURVE_STEP
-            }
-        }
-        for (frame in keys) {
-            val time =
-                if (drag == DragKind.VALUE_KEY && dragLane == lane && dragId == frame.timeNanos) dragCurrentNanos else frame.timeNanos
-            val x = xAt(time)
-            if (x < originX - 8f || x > originX + width + 8f) continue
-            val y = valueY(lane, top, height, frame.value)
-            val selected = frame.timeNanos in selection
-            drawList.addCircleFilled(x, y, 5f, color.u32(alpha), 12)
-            drawList.addCircle(
-                x,
-                y,
-                5f,
-                if (selected) EditorTheme.SELECTION.u32 else EditorTheme.APP_BG.u32(0.8f),
-                12,
-                if (selected) 2f else 1f
-            )
-            EditorFonts.with(EditorFonts.small) {
-                drawList.addText(x + 8f, top + 2f, EditorTheme.TEXT_MUTED.u32(alpha), lane.format(frame.value))
-            }
-        }
-    }
-
-    private fun valueY(lane: ValueLane, top: Float, height: Float, value: Double): Float {
-        val normalized = if (lane == ValueLane.SPEED) {
-            ((ln(value.coerceIn(0.1, 8.0)) / Math.log(8.0)) + 1.0) / 2.0
-        } else {
-            ((value - lane.min) / (lane.max - lane.min)).coerceIn(0.0, 1.0)
-        }
-        return top + height - 5f - (height - 10f) * normalized.toFloat()
-    }
-
-    private fun drawViewLane(drawList: ImDrawList, session: EditorSession) {
-        val top = laneTop(LaneKind.VIEW)
-        val height = laneHeight(LaneKind.VIEW)
-        val muted = session.project.lane(LaneKind.VIEW).muted
-        val alpha = if (muted) 0.4f else 1f
-        val selection = session.selection.viewTimes
-        for ((index, frame) in viewKeys.withIndex()) {
-            val time = if (drag == DragKind.VIEW_KEY && dragId == frame.timeNanos) dragCurrentNanos else frame.timeNanos
-            val next = viewKeys.getOrNull(index + 1)?.timeNanos ?: duration
-            val left = xAt(time)
-            val right = minOf(xAt(next), originX + width)
-            if (right < originX || left > originX + width) continue
-            val selected = frame.timeNanos in selection
-            val y1 = top + 4f
-            val y2 = top + height - 4f
-            drawList.addRectFilled(
-                left,
-                y1,
-                maxOf(right, left + 3f),
-                y2,
-                EditorTheme.CONTROL_ACTIVE.u32(0.55f * alpha),
-                3f
-            )
-            drawList.addRectFilled(left, y1, left + 3f, y2, EditorTheme.ACCENT_TEXT.u32(alpha), 2f)
-            if (selected) drawList.addRect(
-                left,
-                y1,
-                maxOf(right, left + 3f),
-                y2,
-                EditorTheme.SELECTION.u32,
-                3f,
-                0,
-                1.5f
-            )
-            if (right - left > 30f) {
-                drawList.pushClipRect(left + 5f, y1, right - 2f, y2, true)
-                EditorFonts.with(EditorFonts.small) {
-                    drawList.addText(
-                        left + 7f,
-                        y1 + (y2 - y1 - ImGui.getFontSize()) / 2f,
-                        EditorTheme.TEXT.u32(alpha),
-                        viewLabel(frame.value)
-                    )
-                }
-                drawList.popClipRect()
-            }
-        }
-    }
-
-    private fun drawPackLane(drawList: ImDrawList, session: EditorSession) {
-        val top = laneTop(LaneKind.TEXTURE_PACK)
-        val height = laneHeight(LaneKind.TEXTURE_PACK)
-        val muted = session.project.lane(LaneKind.TEXTURE_PACK).muted
-        val alpha = if (muted) 0.4f else 1f
-        val selection = session.selection.packTimes
-        for ((index, frame) in packKeys.withIndex()) {
-            val time = if (drag == DragKind.PACK_KEY && dragId == frame.timeNanos) dragCurrentNanos else frame.timeNanos
-            val next = packKeys.getOrNull(index + 1)?.timeNanos ?: duration
-            val left = xAt(time)
-            val right = minOf(xAt(next), originX + width)
-            if (right < originX || left > originX + width) continue
-            val selected = frame.timeNanos in selection
-            val y1 = top + 4f
-            val y2 = top + height - 4f
-            drawList.addRectFilled(left, y1, maxOf(right, left + 3f), y2, EditorTheme.CONTROL_ACTIVE.u32(0.55f * alpha), 3f)
-            drawList.addRectFilled(left, y1, left + 3f, y2, EditorTheme.PURPLE.u32(alpha), 2f)
-            if (selected) drawList.addRect(left, y1, maxOf(right, left + 3f), y2, EditorTheme.SELECTION.u32, 3f, 0, 1.5f)
-            if (right - left > 30f) {
-                drawList.pushClipRect(left + 5f, y1, right - 2f, y2, true)
-                EditorFonts.with(EditorFonts.small) {
-                    drawList.addText(
-                        left + 7f,
-                        y1 + (y2 - y1 - ImGui.getFontSize()) / 2f,
-                        EditorTheme.TEXT.u32(alpha),
-                        packLabel(frame.value)
-                    )
-                }
-                drawList.popClipRect()
-            }
-        }
-    }
-
-    private fun packLabel(state: PackState): String =
-        if (state.isDefault) "Default textures" else state.packs.joinToString(", ") { it.removeSuffix(".zip") }
-
-    private fun nearestPackKey(mouseX: Float): Keyframe<PackState>? =
-        packKeys.lastOrNull { xAt(it.timeNanos) - 4f <= mouseX }?.takeIf { frame ->
-            val index = packKeys.indexOf(frame)
-            val next = packKeys.getOrNull(index + 1)?.timeNanos ?: duration
-            mouseX <= xAt(next) + 2f
-        }
-
-    private fun addPackKeyframe(session: EditorSession, nanos: Long) {
-        val current = session.project.packAt(nanos) ?: PackState(context.host.activeResourcePacks())
-        session.execute(SetPackKeyframe(nanos, current))
-        session.selection = Selection(packTimes = setOf(nanos))
-        val state = session.project.lane(LaneKind.TEXTURE_PACK)
-        if (state.muted) session.execute(SetLaneState(LaneKind.TEXTURE_PACK, state.copy(muted = false)))
-    }
-
-    private fun packMenu(session: EditorSession, replay: ReplaySession, time: Long) {
-        val frame = session.project.packs.at(time) ?: return
-        Widgets.mutedText("${packLabel(frame.value)} from ${TimeFormat.clock(time)}")
-        ImGui.separator()
-        if (Menus.item("Go to")) replay.seek(time)
-        ImGui.separator()
-        if (Menus.item("Default textures", "", frame.value.isDefault)) session.execute(SetPackKeyframe(time, PackState.DEFAULT))
-        val available = context.host.resourcePacks()
-        if (available.isEmpty()) Widgets.mutedText("No packs in the resourcepacks folder")
-        for (pack in available) {
-            if (Menus.item(pack.removeSuffix(".zip"), "", pack in frame.value.packs)) session.execute(
-                SetPackKeyframe(time, frame.value.toggled(pack))
-            )
-        }
-        Widgets.tooltip("Packs listed later override earlier ones, like the in-game resource pack screen. Switching packs reloads textures, which takes a moment.")
-        ImGui.separator()
-        if (Menus.item("Delete texture pack keyframe", "Del")) {
-            session.execute(RemovePackKeyframes(setOf(time)))
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun viewLabel(view: ViewState): String {
-        val target =
-            if (view.targetEntityId == CameraSettings.TARGET_RECORDER) context.replay?.shadow?.localPlayer?.name
-                ?: "recorder" else entityName(view.targetEntityId)
-        return if (view.mode == CameraMode.FREE) "Free camera" else "${view.mode.label}   $target"
-    }
-
-    private fun entityName(id: Int): String {
-        val shadow = context.replay?.shadow ?: return "#$id"
-        val entity = shadow.entities[id] ?: return "#$id"
-        return entity.uuid?.let { shadow.players.profile(it)?.name } ?: "#$id"
-    }
-
-    private fun laneColor(kind: LaneKind): EditorTheme.Rgb =
-        allLanes.firstOrNull { it.kind == kind }?.strip ?: EditorTheme.ACCENT_TEXT
-
-    private fun drawClipLane(drawList: ImDrawList, session: EditorSession) {
-        val top = laneTop(LaneKind.CLIPS)
-        val height = laneHeight(LaneKind.CLIPS)
-        val selection = session.selection.clipIds
-        val hoveredClip = if (drag == DragKind.NONE) clipAt(ImGui.getMousePosX(), ImGui.getMousePosY()) else null
-        for (clip in clips) {
-            val dragging =
-                dragId == clip.id && (drag == DragKind.CLIP_BODY || drag == DragKind.CLIP_START || drag == DragKind.CLIP_END)
-            val start = if (dragging) dragClipStart else clip.startNanos
-            val end = if (dragging) dragClipEnd else clip.endNanos
-            val left = xAt(start)
-            val right = xAt(end)
-            if (right < originX || left > originX + width) continue
-            val selected = clip.id in selection
-            val fill = when {
-                selected -> EditorTheme.CLIP_SELECTED
-                hoveredClip?.id == clip.id -> EditorTheme.CLIP_HOVER
-                else -> EditorTheme.CLIP
-            }
-            val y1 = top + 3f
-            val y2 = top + height - 3f
-            drawList.addRectFilled(left, y1, maxOf(right, left + 2f), y2, fill.u32, 3f)
-            drawList.addRectFilled(left, y1, maxOf(right, left + 2f), y1 + 3f, EditorTheme.TEXT.u32(0.14f), 3f)
-            drawList.addRect(
-                left,
-                y1,
-                maxOf(right, left + 2f),
-                y2,
-                if (selected) EditorTheme.SELECTION.u32 else EditorTheme.APP_BG.u32(0.7f),
-                3f,
-                0,
-                if (selected) 1.5f else 1f
-            )
-            if (right - left > 24f) {
-                drawList.pushClipRect(maxOf(left + 2f, originX), y1, minOf(right - 2f, originX + width), y2, true)
-                EditorFonts.with(EditorFonts.small) {
-                    drawList.addText(
-                        left + 6f,
-                        y1 + (y2 - y1 - ImGui.getFontSize()) / 2f,
-                        0xFFFFFFFF.toInt(),
-                        clip.title
-                    )
-                }
-                drawList.popClipRect()
-            }
-        }
-    }
-
-    private fun drawMarkerLane(drawList: ImDrawList, session: EditorSession) {
-        val top = laneTop(LaneKind.MARKERS)
-        val height = laneHeight(LaneKind.MARKERS)
-        val selection = session.selection.markerIds
-        for (marker in markers) {
-            val time = if (drag == DragKind.MARKER && dragId == marker.id) dragCurrentNanos else marker.nanos
-            val x = xAt(time)
-            if (x < originX - 10f || x > originX + width + 10f) continue
-            val selected = marker.id in selection
-            val color = Widgets.rgbToU32(marker.color)
-            drawList.addRectFilled(x - 1f, top + 4f, x + 1f, top + height - 4f, color)
-            if (marker.kind == MarkerKind.NOTE) drawList.addTriangleFilled(
-                x - 1f,
-                top + 4f,
-                x + 9f,
-                top + 8f,
-                x - 1f,
-                top + 12f,
-                color
-            )
-            else Icons.draw(
-                drawList,
-                MARKER_ICONS[marker.kind] ?: Icon.MARKER,
-                x + 1f,
-                top + 3f,
-                EditorFonts.px(10f),
-                color
-            )
-            if (selected) drawList.addRect(x - 4f, top + 2f, x + 11f, top + height - 2f, EditorTheme.SELECTION.u32, 2f)
-            EditorFonts.with(EditorFonts.small) {
-                drawList.addText(
-                    x + 12f,
-                    top + (height - ImGui.getFontSize()) / 2f,
-                    EditorTheme.TEXT_MUTED.u32,
-                    marker.label
-                )
-            }
-        }
-    }
-
-    private fun drawTimelapseLane(drawList: ImDrawList, session: EditorSession) {
-        val top = laneTop(LaneKind.TIMELAPSE)
-        val height = laneHeight(LaneKind.TIMELAPSE)
-        val selection = session.selection.timelapseIds
-        val color = EditorTheme.WARNING.u32
-        for (mark in timelapses) {
-            val time = if (drag == DragKind.TIMELAPSE && dragId == mark.id) dragCurrentNanos else mark.nanos
-            val x = xAt(time)
-            if (x < originX - 10f || x > originX + width + 10f) continue
-            val selected = mark.id in selection
-            val midY = top + height / 2f
-            drawList.addTriangleFilled(x - 2f, midY - 5f, x + 4f, midY, x - 2f, midY + 5f, color)
-            drawList.addTriangleFilled(x + 3f, midY - 5f, x + 9f, midY, x + 3f, midY + 5f, color)
-            if (selected) drawList.addRect(x - 4f, top + 2f, x + 13f, top + height - 2f, EditorTheme.SELECTION.u32, 2f)
-            EditorFonts.with(EditorFonts.small) {
-                drawList.addText(
-                    x + 14f,
-                    top + (height - ImGui.getFontSize()) / 2f,
-                    EditorTheme.TEXT_MUTED.u32,
-                    String.format("+%.1fs", mark.skipNanos / Nanos.PER_SECOND.toDouble())
-                )
-            }
-        }
-    }
-
-    private fun drawPoseLane(drawList: ImDrawList, session: EditorSession) {
-        if (poseKeys.isEmpty() && LaneKind.POSE !in context.timeline.shownLanes) return
-        val top = laneTop(LaneKind.POSE)
-        val height = laneHeight(LaneKind.POSE)
-        if (height <= 0f) return
-        val selectedEntity = context.selectedEntityId
-        val midY = top + height / 2f
-        val half = 5f
-        for (key in poseKeys) {
-            val x = xAt(key.timeNanos)
-            if (x < originX - 10f || x > originX + width + 10f) continue
-            val own = selectedEntity == null || key.entityId == selectedEntity
-            val color = poseKeyColor(session, key.entityId).u32(if (own) 1f else 0.35f)
-            if (key.parts == 0) {
-                drawList.addQuad(x, midY - half, x + half, midY, x, midY + half, x - half, midY, color, 1.5f)
-            } else {
-                drawList.addQuadFilled(x, midY - half, x + half, midY, x, midY + half, x - half, midY, color)
-            }
-            if (own && selectedEntity != null && Math.abs(session.playheadNanos - key.timeNanos) < Nanos.PER_MILLI) drawList.addQuad(
-                x,
-                midY - half - 3f,
-                x + half + 3f,
-                midY,
-                x,
-                midY + half + 3f,
-                x - half - 3f,
-                midY,
-                EditorTheme.SELECTION.u32,
-                1.5f
-            )
-        }
-    }
-
-    private fun poseKeyColor(session: EditorSession, entityId: Int): EditorTheme.Rgb {
-        val index = session.events.index ?: return EditorTheme.PURPLE
-        val name = index.tracksOf(entityId).firstOrNull()?.name ?: return EditorTheme.PURPLE
-        val recorder = session.replay?.shadow?.localPlayer?.entityId == entityId
-        return PlayerColors.of(index, name, recorder)
-    }
-
-    private fun poseKeyAt(mouseX: Float): PoseKey? {
-        val selected = context.selectedEntityId
-        val candidates =
-            if (selected != null && poseKeys.any { it.entityId == selected }) poseKeys.filter { it.entityId == selected } else poseKeys
-        return candidates.minByOrNull { Math.abs(xAt(it.timeNanos) - mouseX) }
-            ?.takeIf { Math.abs(xAt(it.timeNanos) - mouseX) <= 8f }
-    }
-
-    private fun poseEntityName(session: EditorSession, entityId: Int): String {
-        val shadow = session.replay?.shadow
-        if (shadow != null && shadow.localPlayer.entityId == entityId) return shadow.localPlayer.name ?: "Recorder"
-        session.events.index?.tracksOf(entityId)?.firstOrNull()?.name?.let { return it }
-        return shadow?.entities?.get(entityId)?.uuid?.let { shadow.players.profile(it)?.name } ?: "#$entityId"
-    }
-
-    private fun selectPoseEntity(session: EditorSession, entityId: Int) {
-        val shadow = session.replay?.shadow
-        val recorder = shadow?.localPlayer?.entityId == entityId
-        val entity = shadow?.entities?.get(entityId)
-        context.selectEntity(
-            entityId,
-            poseEntityName(session, entityId),
-            recorder || entity?.isPlayer == true,
-            recorder,
-            entity?.uuid?.toString()
-        )
-    }
-
-    private fun poseMenu(session: EditorSession, replay: ReplaySession, key: PoseKey) {
-        Widgets.smallText(
-            "Pose ${
-                poseEntityName(
-                    session,
-                    key.entityId
-                )
-            }  ${TimeFormat.clock(key.timeNanos)}  ${if (key.parts == 0) "release" else "${key.parts} limbs"}",
-            EditorTheme.TEXT_DIM.u32
-        )
-        ImGui.separator()
-        if (Menus.item("Go to keyframe")) {
-            replay.seek(key.timeNanos)
-            selectPoseEntity(session, key.entityId)
-        }
-        if (Menus.item("Move to playhead") && session.project.poses[key.entityId]?.at(session.playheadNanos) == null) session.execute(
-            MovePoseKeyframe(key.entityId, key.timeNanos, session.playheadNanos)
-        )
-        ImGui.separator()
-        if (Menus.item("Delete pose keyframe", "Del")) session.execute(
-            RemovePoseKeyframes(
-                key.entityId,
-                setOf(key.timeNanos)
-            )
-        )
-        if (Menus.item("Clear all poses of ${poseEntityName(session, key.entityId)}")) {
-            val track = session.project.poses[key.entityId]
-            if (track != null) session.execute(
-                RemovePoseKeyframes(
-                    key.entityId,
-                    track.keyframes.map { it.timeNanos }.toSet()
-                )
-            )
-        }
-    }
-
-    private fun drawEventLane(drawList: ImDrawList, session: EditorSession) {
-        val top = laneTop(LaneKind.EVENTS)
-        val height = laneHeight(LaneKind.EVENTS)
-        val centerY = top + height / 2f
-        val events = session.events.events
-        if (events.isEmpty()) return
-        val start = lowerBound(events, context.timeline.offsetNanos - Nanos.PER_SECOND)
-        val end = context.timeline.offsetNanos + visibleNanos + Nanos.PER_SECOND
-        var index = start
-        while (index < events.size) {
-            val event = events[index]
-            if (event.nanos > end) break
-            val x = xAt(event.nanos)
-            if (x >= originX - 4f && x <= originX + width + 4f) {
-                drawList.addCircleFilled(x, centerY, 3.5f, Widgets.rgbToU32(event.kind.color), 10)
-            }
-            index++
-        }
-    }
-
-    private fun lowerBound(events: List<TimelineEvent>, nanos: Long): Int {
-        var low = 0
-        var high = events.size
-        while (low < high) {
-            val middle = (low + high) ushr 1
-            if (events[middle].nanos < nanos) low = middle + 1 else high = middle
-        }
-        return low
-    }
-
-    private fun drawPlayhead(drawList: ImDrawList, positionNanos: Long) {
-        val x = xAt(positionNanos)
-        if (x < originX || x > originX + width) return
-        val bottom = tracksBottom()
-        drawList.addLine(x, originY + 4f, x, bottom, EditorTheme.PLAYHEAD.u32, 1.5f)
-        val half = EditorFonts.px(5f)
-        val headBottom = originY + EditorFonts.px(9f)
-        drawList.addRectFilled(x - half, originY + 1f, x + half, headBottom, EditorTheme.PLAYHEAD.u32, 2f)
-        drawList.addTriangleFilled(x - half, headBottom - 1f, x + half, headBottom - 1f, x, headBottom + half, EditorTheme.PLAYHEAD.u32)
-        if (drag != DragKind.SCRUB) return
-        val label = TimeFormat.timecode(positionNanos, context.timeline.renderFps)
-        EditorFonts.with(EditorFonts.small) {
-            val labelWidth = Widgets.textWidth(label)
-            val labelX = if (x + 12f + labelWidth + 8f > originX + width) x - 12f - labelWidth - 8f else x + 10f
-            drawList.addRectFilled(
-                labelX,
-                originY + 3f,
-                labelX + labelWidth + 8f,
-                originY + 3f + ImGui.getFontSize() + 4f,
-                EditorTheme.PLAYHEAD.u32(0.9f),
-                3f
-            )
-            drawList.addText(labelX + 4f, originY + 5f, 0xFF101010.toInt(), label)
-        }
-    }
-
-    private fun drawHoverLine(drawList: ImDrawList) {
-        val mouseX = ImGui.getMousePosX()
-        val mouseY = ImGui.getMousePosY()
-        if (mouseX < originX || mouseX > originX + width || mouseY > tracksBottom()) return
-        drawList.addLine(mouseX, originY + RULER_HEIGHT, mouseX, tracksBottom(), EditorTheme.SKIMMER.u32(0.45f), 1f)
-        val label = TimeFormat.clock(nanosAt(mouseX).coerceIn(0L, duration))
-        EditorFonts.with(EditorFonts.small) {
-            val labelWidth = Widgets.textWidth(label)
-            val labelX = if (mouseX + 8f + labelWidth > originX + width) mouseX - 8f - labelWidth else mouseX + 6f
-            drawList.addRectFilled(
-                labelX - 2f,
-                originY + RULER_HEIGHT - 16f,
-                labelX + labelWidth + 2f,
-                originY + RULER_HEIGHT - 1f,
-                EditorTheme.APP_BG.u32(0.85f),
-                2f
-            )
-            drawList.addText(labelX, originY + RULER_HEIGHT - 15f, EditorTheme.TEXT_MUTED.u32, label)
-        }
-    }
-
-    private fun drawBox(drawList: ImDrawList) {
-        val x1 = minOf(dragStartMouseX, ImGui.getMousePosX())
-        val x2 = maxOf(dragStartMouseX, ImGui.getMousePosX())
-        val y1 = minOf(dragStartMouseY, ImGui.getMousePosY())
-        val y2 = maxOf(dragStartMouseY, ImGui.getMousePosY())
-        drawList.addRectFilled(x1, y1, x2, y2, EditorTheme.TEXT.u32(0.08f))
-        drawList.addRect(x1, y1, x2, y2, EditorTheme.TEXT.u32(0.6f), 0f, 0, 1f)
-    }
-
-    private fun navTop(): Float = originY + canvasHeight - NAV_HEIGHT
-
-    private fun tracksBottom(): Float = navTop() - NAV_GAP
-
-    private fun drawNavigator(drawList: ImDrawList, view: TimelineView) {
-        val top = navTop()
-        drawList.addRectFilled(originX, top, originX + width, top + NAV_HEIGHT, EditorTheme.PANEL_SUNKEN.u32, NAV_HEIGHT / 2f)
-        for (time in keyTimes) drawList.addRectFilled(
-            navX(time) - 1f,
-            top + 3f,
-            navX(time) + 1f,
-            top + NAV_HEIGHT - 3f,
-            EditorTheme.KEYFRAME_SMOOTH.u32(0.35f)
-        )
-        for (marker in markers) drawList.addRectFilled(
-            navX(marker.nanos) - 1f,
-            top + 3f,
-            navX(marker.nanos) + 1f,
-            top + NAV_HEIGHT - 3f,
-            Widgets.rgbToU32(marker.color, 0.5f)
-        )
-        val left = navX(view.offsetNanos)
-        val right = navX(view.offsetNanos + visibleNanos)
-        val thumbHovered = drag == DragKind.NONE && ImGui.isWindowHovered() && ImGui.isMouseHoveringRect(originX, top, originX + width, top + NAV_HEIGHT)
-        drawList.addRectFilled(
-            left,
-            top + 1f,
-            maxOf(right, left + NAV_HEIGHT),
-            top + NAV_HEIGHT - 1f,
-            EditorTheme.TEXT.u32(if (thumbHovered) 0.3f else 0.2f),
-            NAV_HEIGHT / 2f
-        )
-        val playX = navX(context.replay?.positionNanos ?: 0L)
-        drawList.addRectFilled(playX - 1f, top + 1f, playX + 1f, top + NAV_HEIGHT - 1f, EditorTheme.PLAYHEAD.u32, 1f)
-    }
-
-    private fun navX(nanos: Long): Float = originX + (nanos.toDouble() / duration * width).toFloat()
-
-    private fun navNanos(x: Float): Long = ((x - originX) / width * duration).toLong()
-
-    private fun hoverFeedback(session: EditorSession) {
-        val mouseX = ImGui.getMousePosX()
-        val mouseY = ImGui.getMousePosY()
-        if (mouseX < originX) return
+    private fun hoverFeedback(session: EditorSession, mouseX: Float, mouseY: Float) {
+        if (mouseX < geometry.originX) return
         if (mouseY >= navTop()) {
             ImGui.setMouseCursor(ImGuiMouseCursor.ResizeEW)
             return
         }
-        if (mouseY < originY + RULER_HEIGHT) {
+        if (scrollbarHit(mouseX, mouseY)) return
+        if (mouseY < geometry.tracksTop) {
             val handle = handleAt(session, mouseX, mouseY)
             ImGui.setMouseCursor(ImGuiMouseCursor.ResizeEW)
-            if (handle != null) ImGui.setTooltip(
-                if (handle == DragKind.IN_POINT) "In point ${
-                    TimeFormat.clock(
-                        inPoint(
-                            session
-                        )
-                    )
-                }\nDrag to move" else "Out point ${TimeFormat.clock(outPoint(session))}\nDrag to move"
-            )
+            if (handle == DragKind.IN_POINT) TimelineTooltip.simple(Icon.MARK_IN, EditorTheme.SELECTION, "In point", TimeFormat.clock(actions.inPoint(session)), listOf("Drag to move", "I sets it at the playhead"))
+            else if (handle == DragKind.OUT_POINT) TimelineTooltip.simple(Icon.MARK_OUT, EditorTheme.SELECTION, "Out point", TimeFormat.clock(actions.outPoint(session)), listOf("Drag to move", "O sets it at the playhead"))
             return
         }
-        val lane = laneAt(mouseY) ?: return
-        when (lane.kind) {
-            LaneKind.CAMERA -> nearestKeyframe(mouseX)?.let { frame ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                ImGui.setTooltip(
-                    "Keyframe  ${TimeFormat.clock(frame.timeNanos)}\n${frame.mode.label}   ${frame.easing.label}   FOV %.0f\n%.1f  %.1f  %.1f   yaw %.1f  pitch %.1f\nDrag to move   Alt+drag to duplicate   Double-click to jump".format(
-                        frame.pose.fov,
-                        frame.pose.position.x,
-                        frame.pose.position.y,
-                        frame.pose.position.z,
-                        frame.pose.rotation.yaw,
-                        frame.pose.rotation.pitch
-                    ),
-                )
-            }
-
-            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
-                val valueLane = ValueLane.entries.first { it.kind == lane.kind }
-                nearestValueKey(valueLane, mouseX)?.let { frame ->
-                    ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                    ImGui.setTooltip("${valueLane.label} ${valueLane.format(frame.value)} at ${TimeFormat.clock(frame.timeNanos)}\nDrag to move  -  right-click to change the value")
-                }
-            }
-
-            LaneKind.VIEW -> nearestViewKey(mouseX)?.let { frame ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                ImGui.setTooltip("${viewLabel(frame.value)} from ${TimeFormat.clock(frame.timeNanos)}\nDrag to move  -  right-click for actions")
-            }
-
-            LaneKind.TEXTURE_PACK -> nearestPackKey(mouseX)?.let { frame ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                ImGui.setTooltip("${packLabel(frame.value)} from ${TimeFormat.clock(frame.timeNanos)}\nDrag to move  -  right-click to choose packs")
-            }
-
-            LaneKind.CLIPS -> clipAt(mouseX, mouseY)?.let { clip ->
-                val left = xAt(clip.startNanos)
-                val right = xAt(clip.endNanos)
-                val onEdge = mouseX - left <= EDGE_GRAB || right - mouseX <= EDGE_GRAB
-                ImGui.setMouseCursor(if (onEdge) ImGuiMouseCursor.ResizeEW else ImGuiMouseCursor.Hand)
-                ImGui.setTooltip(
-                    "${clip.title}\n${TimeFormat.clock(clip.startNanos)} - ${TimeFormat.clock(clip.endNanos)}  (${
-                        TimeFormat.clock(
-                            clip.durationNanos
-                        )
-                    })\n${if (onEdge) "Drag to trim" else "Drag to move   Double-click to play"}"
-                )
-            }
-
-            LaneKind.MARKERS -> markerAt(mouseX)?.let { marker ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                ImGui.setTooltip("${marker.label}\n${TimeFormat.clock(marker.nanos)}\nDrag to move   Right-click to rename")
-            }
-
-            LaneKind.TIMELAPSE -> timelapseAt(mouseX)?.let { mark ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                ImGui.setTooltip(
-                    "Timelapse: skip ${String.format("%.1fs", mark.skipNanos / Nanos.PER_SECOND.toDouble())}\n${
-                        TimeFormat.clock(mark.nanos)
-                    }\nDrag to move   Right-click to edit"
-                )
-            }
-
-            LaneKind.POSE -> poseKeyAt(mouseX)?.let { key ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                val limbs = if (key.parts == 0) "release" else "${key.parts} limbs"
-                ImGui.setTooltip(
-                    "Pose: ${
-                        poseEntityName(
-                            session,
-                            key.entityId
-                        )
-                    }  $limbs\n${TimeFormat.clock(key.timeNanos)}\nClick to go there   Right-click for actions"
-                )
-            }
-
-            LaneKind.EVENTS -> eventAt(session, mouseX)?.let { event ->
-                ImGui.setMouseCursor(ImGuiMouseCursor.Hand)
-                ImGui.setTooltip("${event.kind.label}: ${event.label}\n${TimeFormat.clock(event.nanos)}\nClick to jump")
-            }
-
-            LaneKind.PLAYERS -> gameLanes.hoverPlayers(session, mouseX, mouseY - laneTop(lane.kind), lane.rowHeight)
-            LaneKind.WORLD -> gameLanes.hoverWorld(mouseX, mouseY - laneTop(lane.kind), lane.rowHeight)
-            LaneKind.MOMENTS -> gameLanes.momentAt(session, mouseX)?.let { moment ->
-                gameLanes.hoverMoment(moment, session.project.moment(moment.id) != null)
-            }
-
-            else -> Unit
-        }
+        val lane = geometry.laneAt(mouseY) ?: return
+        lanes.hover(session, lane, lanes.hovered, mouseX, mouseY)
     }
 
     private fun handleAt(session: EditorSession, mouseX: Float, mouseY: Float): DragKind? {
-        if (mouseY < originY + RULER_HEIGHT - HANDLE_HEIGHT - 2f) return null
-        val inX = xAt(inPoint(session))
-        val outX = xAt(outPoint(session))
-        if (mouseX >= inX - 2f && mouseX <= inX + HANDLE_WIDTH + 2f) return DragKind.IN_POINT
-        if (mouseX >= outX - HANDLE_WIDTH - 2f && mouseX <= outX + 2f) return DragKind.OUT_POINT
+        if (mouseY < geometry.rulerTop + EditorFonts.px(14f) || mouseY >= geometry.tracksTop) return null
+        val inX = geometry.xAt(actions.inPoint(session))
+        val outX = geometry.xAt(actions.outPoint(session))
+        val grab = HANDLE_WIDTH / 2f + EditorFonts.px(3f)
+        val inDistance = abs(mouseX - inX)
+        val outDistance = abs(mouseX - outX)
+        if (inDistance <= grab && inDistance <= outDistance) return DragKind.IN_POINT
+        if (outDistance <= grab) return DragKind.OUT_POINT
         return null
     }
 
-    private fun handleInput(session: EditorSession, view: TimelineView, hovered: Boolean, nowNanos: Long) {
+    private fun input(session: EditorSession, view: TimelineView, hovered: Boolean, mouseX: Float, mouseY: Float, nowNanos: Long) {
         val io = ImGui.getIO()
-        val mouseX = ImGui.getMousePosX()
-        val mouseY = ImGui.getMousePosY()
-        val wheel = io.mouseWheel
-        if (hovered && wheel != 0f) {
-            if (io.keyShift) view.offsetNanos -= (wheel * visibleNanos * 0.1).toLong() else zoomAround(
-                view,
-                Math.pow(1.25, wheel.toDouble()),
-                nanosAt(mouseX)
-            )
-            view.offsetNanos = view.offsetNanos.coerceIn(0L, maxOf(0L, duration - visibleNanos))
+        if (drag == DragKind.REORDER && !ImGui.isMouseDown(ImGuiMouseButton.Left)) {
+            drag = DragKind.NONE
+            reorderKind = null
         }
-        if (hovered && ImGui.isMouseClicked(ImGuiMouseButton.Middle)) {
+        if (hovered && drag == DragKind.NONE) {
+            val wheel = io.mouseWheel
+            val wheelH = io.mouseWheelH
+            if (wheel != 0f) {
+                when {
+                    io.keyCtrl -> scrollBy(-wheel * EditorFonts.px(40f))
+                    io.keyShift -> view.offsetNanos -= (wheel * geometry.visibleNanos * 0.1).toLong()
+                    else -> zoomAround(view, 1.25.pow(wheel.toDouble()), geometry.nanosAt(mouseX))
+                }
+            }
+            if (wheelH != 0f) view.offsetNanos += (wheelH * geometry.visibleNanos * 0.1).toLong()
+            view.offsetNanos = view.offsetNanos.coerceIn(0L, maxOf(0L, duration - geometry.visibleNanos))
+        }
+        if (hovered && drag == DragKind.NONE && ImGui.isMouseClicked(ImGuiMouseButton.Middle)) {
             drag = DragKind.PAN
-            dragStartMouseX = mouseX
+            dragStartX = mouseX
             dragOriginNanos = view.offsetNanos
         }
-        if (hovered && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left) && mouseX >= originX) {
-            if (doubleClick(session, mouseX, mouseY)) {
-                drag = DragKind.NONE
-                return
-            }
-        }
-        if (hovered && ImGui.isMouseClicked(ImGuiMouseButton.Left) && mouseX >= originX) beginLeftDrag(
-            session,
-            mouseX,
-            mouseY,
-            view
-        )
+        if (hovered && drag == DragKind.NONE && ImGui.isMouseDoubleClicked(ImGuiMouseButton.Left) && doubleClick(session, mouseX, mouseY)) return
+        if (hovered && drag == DragKind.NONE && ImGui.isMouseClicked(ImGuiMouseButton.Left)) press(session, view, mouseX, mouseY)
+        if (drag == DragKind.NONE || drag == DragKind.REORDER) return
         val button = if (drag == DragKind.PAN) ImGuiMouseButton.Middle else ImGuiMouseButton.Left
-        if (drag != DragKind.NONE && ImGui.isMouseDown(button)) updateDrag(session, view, mouseX, mouseY, nowNanos)
-        if (drag != DragKind.NONE && ImGui.isMouseReleased(button)) finishDrag(session, view)
+        if (ImGui.isMouseDown(button)) update(session, view, mouseX, mouseY, nowNanos)
+        if (ImGui.isMouseReleased(button)) release(session, mouseX)
     }
 
     private fun doubleClick(session: EditorSession, mouseX: Float, mouseY: Float): Boolean {
         val replay = session.replay ?: return false
-        val lane = laneAt(mouseY) ?: return false
-        when (lane.kind) {
-            LaneKind.CAMERA -> nearestKeyframe(mouseX)?.let {
-                replay.seek(it.timeNanos)
-                session.selection = Selection(keyframeTimes = setOf(it.timeNanos))
-                return true
+        if (mouseY < geometry.tracksTop || mouseY >= geometry.tracksBottom) return false
+        val lane = geometry.laneAt(mouseY) ?: return false
+        val item = lanes.itemAt(session, mouseX, mouseY)
+        val project = session.project
+        when (item) {
+            is TimelineItem.CameraKey -> {
+                replay.seek(item.nanos)
+                session.selection = Selection(keyframeTimes = setOf(item.nanos))
             }
 
-            LaneKind.CLIPS -> clipAt(mouseX, mouseY)?.let {
-                session.execute(SetInOutPoints(it.startNanos, it.endNanos))
-                replay.seek(it.startNanos)
+            is TimelineItem.ValueKeyItem -> replay.seek(item.key.nanos)
+            is TimelineItem.ViewKey -> replay.seek(item.nanos)
+            is TimelineItem.PackKey -> replay.seek(item.nanos)
+            is TimelineItem.ClipItem -> project.clip(item.id)?.let { actions.playClip(session, it) }
+            is TimelineItem.MarkerItem -> project.marker(item.id)?.let { replay.seek(it.nanos) }
+            is TimelineItem.TimelapseItem -> project.timelapse(item.id)?.let { replay.seek(it.nanos) }
+            is TimelineItem.MomentItem -> gameLanes.moments(session).firstOrNull { it.id == item.id }?.let { moment ->
+                session.execute(SetInOutPoints(moment.nanos, moment.endNanos))
+                replay.seek(moment.nanos)
                 replay.play()
-                session.selection = Selection(clipIds = setOf(it.id))
-                return true
+                session.selection = Selection(momentIds = setOf(moment.id))
             }
 
-            LaneKind.MARKERS -> {
-                val marker = markerAt(mouseX)
-                if (marker != null) replay.seek(marker.nanos) else addMarker(
-                    session,
-                    snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
-                )
-                return true
-            }
+            null -> {
+                val nanos = snap(geometry.nanosAt(mouseX).coerceIn(0L, duration), Selection.NONE, true)
+                when (lane.kind) {
+                    LaneKind.MARKERS -> actions.addMarker(session, nanos)
+                    LaneKind.TIMELAPSE -> actions.addTimelapse(session, nanos)
+                    LaneKind.VIEW -> actions.addViewKeyframe(session, nanos)
+                    LaneKind.TEXTURE_PACK -> actions.addPackKeyframe(session, nanos)
+                    LaneKind.MOMENTS -> gameLanes.addManual(session, nanos)
+                    LaneKind.CAMERA -> {
+                        replay.seek(nanos)
+                        actions.addCameraKeyframe(session, nanos)
+                    }
 
-            LaneKind.TIMELAPSE -> {
-                val mark = timelapseAt(mouseX)
-                if (mark != null) replay.seek(mark.nanos) else addTimelapse(
-                    session,
-                    snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
-                )
-                return true
-            }
-
-            LaneKind.POSE -> poseKeyAt(mouseX)?.let {
-                replay.seek(it.timeNanos)
-                selectPoseEntity(session, it.entityId)
-                return true
-            }
-
-            LaneKind.PLAYERS -> {
-                gameLanes.togglePlayer(mouseY - laneTop(lane.kind), lane.rowHeight)
-                return true
-            }
-
-            LaneKind.MOMENTS -> {
-                val moment = gameLanes.momentAt(session, mouseX)
-                if (moment != null) {
-                    session.execute(SetInOutPoints(moment.nanos, moment.endNanos))
-                    replay.seek(moment.nanos)
-                    replay.play()
-                    session.selection = Selection(momentIds = setOf(moment.id))
-                } else gameLanes.addManual(
-                    session,
-                    snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
-                )
-                return true
-            }
-
-            LaneKind.VIEW -> {
-                if (nearestViewKey(mouseX) == null) {
-                    addViewKeyframe(
-                        session,
-                        snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
-                    )
-                    return true
-                }
-            }
-
-            LaneKind.TEXTURE_PACK -> {
-                if (nearestPackKey(mouseX) == null) {
-                    addPackKeyframe(
-                        session,
-                        snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
-                    )
-                    return true
-                }
-            }
-
-            else -> {
-                val valueLane = ValueLane.entries.firstOrNull { it.kind == lane.kind } ?: return false
-                if (nearestValueKey(valueLane, mouseX) == null) {
-                    addValueKeyframe(
-                        session,
-                        valueLane,
-                        snap(nanosAt(mouseX).coerceIn(0L, duration), context.timeline, emptySet(), true)
-                    )
-                    return true
+                    LaneKind.PLAYERS -> gameLanes.togglePlayer(mouseY - geometry.laneTop(lane.kind), lane.rowHeight)
+                    else -> lane.valueLane?.let { actions.addValueKeyframe(session, it, nanos) } ?: return false
                 }
             }
         }
-        return false
+        drag = DragKind.NONE
+        return true
     }
 
-    private fun beginLeftDrag(session: EditorSession, mouseX: Float, mouseY: Float, view: TimelineView) {
+    private fun press(session: EditorSession, view: TimelineView, mouseX: Float, mouseY: Float) {
         val io = ImGui.getIO()
-        val additive = io.keyCtrl
-        dragStartMouseX = mouseX
-        dragStartMouseY = mouseY
-        dragDuplicate = false
+        val additive = io.keyCtrl || io.keyShift
+        dragStartX = mouseX
+        dragStartY = mouseY
+        dragMoved = false
+        dragAdditiveToggle = false
+        dragItem = null
         if (mouseY >= navTop()) {
             val left = navX(view.offsetNanos)
-            val right = navX(view.offsetNanos + visibleNanos)
+            val right = navX(view.offsetNanos + geometry.visibleNanos)
             navOriginOffset = view.offsetNanos
-            navOriginVisible = visibleNanos
+            navOriginVisible = geometry.visibleNanos
             drag = when {
                 mouseX >= left - 4f && mouseX <= left + 5f -> DragKind.NAV_LEFT
                 mouseX >= right - 5f && mouseX <= right + 4f -> DragKind.NAV_RIGHT
                 mouseX > left && mouseX < right -> DragKind.NAV_THUMB
                 else -> {
-                    view.offsetNanos =
-                        (navNanos(mouseX) - visibleNanos / 2).coerceIn(0L, maxOf(0L, duration - visibleNanos))
+                    view.offsetNanos = (navNanos(mouseX) - geometry.visibleNanos / 2).coerceIn(0L, maxOf(0L, duration - geometry.visibleNanos))
                     navOriginOffset = view.offsetNanos
                     DragKind.NAV_THUMB
                 }
             }
             return
         }
-        if (mouseY < originY + RULER_HEIGHT) {
+        if (scrollbarHit(mouseX, mouseY)) {
+            drag = DragKind.SCROLLBAR
+            scrollOrigin = geometry.scrollY
+            return
+        }
+        if (mouseY < geometry.tracksTop) {
             val handle = handleAt(session, mouseX, mouseY)
             if (handle != null) {
                 drag = handle
-                dragCurrentNanos = if (handle == DragKind.IN_POINT) inPoint(session) else outPoint(session)
+                dragCurrentNanos = if (handle == DragKind.IN_POINT) actions.inPoint(session) else actions.outPoint(session)
                 return
             }
-        } else {
-            val lane = laneAt(mouseY)
-            if (lane != null && beginLaneDrag(session, lane, mouseX, mouseY, additive, io.keyAlt)) return
-            if (lane != null && lane.kind !in NO_BOX_LANES) {
-                drag = DragKind.BOX
-                if (!additive) session.selection = Selection.NONE
-                return
-            }
+            beginScrub(session, mouseX)
+            return
         }
-        if (!additive) session.selection = Selection.NONE
-        drag = DragKind.SCRUB
-        scrubTarget = snapMagnetic(nanosAt(mouseX), view).coerceIn(0L, duration)
-        lastScrubSeekNanos = 0L
-    }
-
-    private fun beginLaneDrag(
-        session: EditorSession,
-        lane: Lane,
-        mouseX: Float,
-        mouseY: Float,
-        additive: Boolean,
-        duplicate: Boolean
-    ): Boolean {
-        when (lane.kind) {
-            LaneKind.CAMERA -> {
-                val hit = nearestKeyframe(mouseX) ?: return false
-                val locked = session.project.lane(LaneKind.CAMERA).locked
-                val current = session.selection.keyframeTimes
-                session.selection =
-                    if (hit.timeNanos in current && !additive) session.selection else session.selection.withKeyframe(
-                        hit.timeNanos,
-                        additive
-                    )
-                if (locked) return true
-                drag = DragKind.KEYFRAMES
-                dragTimes = session.selection.keyframeTimes.ifEmpty { setOf(hit.timeNanos) }
-                dragDelta = 0L
-                dragDuplicate = duplicate
-                dragOriginNanos = nanosAt(mouseX)
-                return true
-            }
-
-            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
-                val valueLane = ValueLane.entries.first { it.kind == lane.kind }
-                val hit = nearestValueKey(valueLane, mouseX) ?: return false
-                session.selection = session.selection.withValueKeyframe(valueLane, hit.timeNanos, additive)
-                drag = DragKind.VALUE_KEY
-                dragLane = valueLane
-                dragId = hit.timeNanos
-                dragOriginNanos = hit.timeNanos
-                dragCurrentNanos = hit.timeNanos
-                return true
-            }
-
-            LaneKind.VIEW -> {
-                val hit = nearestViewKey(mouseX) ?: return false
-                session.selection = session.selection.withViewKeyframe(hit.timeNanos, additive)
-                drag = DragKind.VIEW_KEY
-                dragId = hit.timeNanos
-                dragOriginNanos = hit.timeNanos
-                dragCurrentNanos = hit.timeNanos
-                return true
-            }
-
-            LaneKind.TEXTURE_PACK -> {
-                val hit = nearestPackKey(mouseX) ?: return false
-                session.selection = session.selection.withPackKeyframe(hit.timeNanos, additive)
-                drag = DragKind.PACK_KEY
-                dragId = hit.timeNanos
-                dragOriginNanos = hit.timeNanos
-                dragCurrentNanos = hit.timeNanos
-                return true
-            }
-
-            LaneKind.CLIPS -> {
-                val clip = clipAt(mouseX, mouseY) ?: return false
-                val left = xAt(clip.startNanos)
-                val right = xAt(clip.endNanos)
-                drag = when {
-                    mouseX - left <= EDGE_GRAB -> DragKind.CLIP_START
-                    right - mouseX <= EDGE_GRAB -> DragKind.CLIP_END
-                    else -> DragKind.CLIP_BODY
+        if (mouseY >= geometry.tracksBottom) return
+        val lane = geometry.laneAt(mouseY)
+        val item = if (lane != null) lanes.itemAt(session, mouseX, mouseY) else null
+        if (item != null) {
+            pressItem(session, item, mouseX, additive, io.keyAlt)
+            return
+        }
+        if (lane != null) {
+            when (lane.kind) {
+                LaneKind.EVENTS -> lanes.eventAt(session, mouseX)?.let {
+                    session.replay?.seek(it.nanos)
+                    return
                 }
-                dragId = clip.id
-                dragClipStart = clip.startNanos
-                dragClipEnd = clip.endNanos
-                dragOriginNanos = nanosAt(mouseX)
-                session.selection = session.selection.withClip(clip.id, additive)
-                return true
-            }
 
-            LaneKind.MARKERS -> {
-                val marker = markerAt(mouseX) ?: return false
-                drag = DragKind.MARKER
-                dragId = marker.id
-                dragOriginNanos = marker.nanos
-                dragCurrentNanos = marker.nanos
-                session.selection = session.selection.withMarker(marker.id, additive)
-                return true
+                LaneKind.PLAYERS -> if (gameLanes.clickPlayers(session, mouseX, mouseY - geometry.laneTop(lane.kind), lane.rowHeight)) return
+                LaneKind.WORLD -> if (gameLanes.clickWorld(session, mouseX, mouseY - geometry.laneTop(lane.kind), lane.rowHeight)) return
+                else -> Unit
             }
+        }
+        drag = DragKind.BOX
+    }
 
-            LaneKind.TIMELAPSE -> {
-                val mark = timelapseAt(mouseX) ?: return false
-                drag = DragKind.TIMELAPSE
-                dragId = mark.id
-                dragOriginNanos = mark.nanos
-                dragCurrentNanos = mark.nanos
-                session.selection = session.selection.withTimelapse(mark.id, additive)
-                return true
+    private fun pressItem(session: EditorSession, item: TimelineItem, mouseX: Float, additive: Boolean, duplicate: Boolean) {
+        val selected = session.selection.has(item)
+        when {
+            selected && additive -> dragAdditiveToggle = true
+            selected -> Unit
+            additive -> session.selection = session.selection.with(item, true)
+            else -> session.selection = session.selection.with(item, false)
+        }
+        context.selectedEntityId = null
+        dragItem = item
+        if (item is TimelineItem.ClipItem) {
+            val clip = session.project.clip(item.id)
+            val edge = if (clip != null) lanes.clipEdge(clip, mouseX) else 0
+            if (clip != null && edge != 0) {
+                drag = if (edge < 0) DragKind.CLIP_START else DragKind.CLIP_END
+                dragClip = clip.id
+                lanes.trimClip = clip.id
+                lanes.trimStart = clip.startNanos
+                lanes.trimEnd = clip.endNanos
+                return
             }
+        }
+        if (item is TimelineItem.CameraKey && session.project.lane(LaneKind.CAMERA).locked) {
+            drag = DragKind.NONE
+            context.status("The camera track is locked")
+            return
+        }
+        if (item is TimelineItem.MomentItem) {
+            drag = DragKind.NONE
+            return
+        }
+        drag = DragKind.MOVE
+        dragAnchorNanos = itemTime(session, item) ?: geometry.nanosAt(mouseX)
+        dragOriginNanos = geometry.nanosAt(mouseX)
+        dragCurrentNanos = dragOriginNanos
+        lanes.duplicating = duplicate && session.selection.keyframeTimes.isNotEmpty()
+    }
 
-            LaneKind.POSE -> {
-                val hit = poseKeyAt(mouseX) ?: return false
-                session.replay?.seek(hit.timeNanos)
-                selectPoseEntity(session, hit.entityId)
-                drag = DragKind.NONE
-                return true
-            }
-
-            LaneKind.EVENTS -> {
-                val event = eventAt(session, mouseX) ?: return false
-                session.replay?.seek(event.nanos)
-                drag = DragKind.NONE
-                return true
-            }
-
-            LaneKind.PLAYERS -> {
-                if (!gameLanes.clickPlayers(session, mouseX, mouseY - laneTop(lane.kind), lane.rowHeight)) return false
-                drag = DragKind.NONE
-                return true
-            }
-
-            LaneKind.WORLD -> {
-                if (!gameLanes.clickWorld(session, mouseX, mouseY - laneTop(lane.kind), lane.rowHeight)) return false
-                drag = DragKind.NONE
-                return true
-            }
-
-            LaneKind.MOMENTS -> {
-                val moment = gameLanes.momentAt(session, mouseX) ?: return false
-                session.selection = session.selection.withMoment(moment.id, additive)
-                context.selectedEntityId = null
-                drag = DragKind.NONE
-                return true
-            }
-
-            else -> return false
+    private fun itemTime(session: EditorSession, item: TimelineItem): Long? {
+        val project = session.project
+        return when (item) {
+            is TimelineItem.CameraKey -> item.nanos
+            is TimelineItem.ValueKeyItem -> item.key.nanos
+            is TimelineItem.ViewKey -> item.nanos
+            is TimelineItem.PackKey -> item.nanos
+            is TimelineItem.MarkerItem -> project.marker(item.id)?.nanos
+            is TimelineItem.TimelapseItem -> project.timelapse(item.id)?.nanos
+            is TimelineItem.ClipItem -> project.clip(item.id)?.startNanos
+            is TimelineItem.MomentItem -> project.moment(item.id)?.nanos
         }
     }
 
-    private fun updateDrag(session: EditorSession, view: TimelineView, mouseX: Float, mouseY: Float, nowNanos: Long) {
-        when (drag) {
-            DragKind.PAN -> view.offsetNanos =
-                (dragOriginNanos - ((mouseX - dragStartMouseX) / width * visibleNanos).toLong()).coerceIn(
-                    0L,
-                    maxOf(0L, duration - visibleNanos)
-                )
+    private fun beginScrub(session: EditorSession, mouseX: Float) {
+        drag = DragKind.SCRUB
+        scrubTarget = snap(geometry.nanosAt(mouseX), Selection.NONE, false).coerceIn(0L, duration)
+        lastScrubSeekNanos = 0L
+        session.replay?.seek(scrubTarget)
+    }
 
+    private fun update(session: EditorSession, view: TimelineView, mouseX: Float, mouseY: Float, nowNanos: Long) {
+        if (!dragMoved && (abs(mouseX - dragStartX) > DRAG_THRESHOLD || abs(mouseY - dragStartY) > DRAG_THRESHOLD)) dragMoved = true
+        when (drag) {
+            DragKind.PAN -> view.offsetNanos = (dragOriginNanos - ((mouseX - dragStartX) / geometry.width * geometry.visibleNanos).toLong()).coerceIn(0L, maxOf(0L, duration - geometry.visibleNanos))
             DragKind.SCRUB -> {
-                scrubTarget = snapMagnetic(nanosAt(mouseX), view).coerceIn(0L, duration)
+                edgeScroll(view, mouseX)
+                scrubTarget = snap(geometry.nanosAt(mouseX), Selection.NONE, false).coerceIn(0L, duration)
                 val interval = maxOf(MIN_SCRUB_INTERVAL, (session.replay?.lastSeekDurationNanos ?: 0L) * 3 / 2)
                 if (nowNanos - lastScrubSeekNanos >= interval) {
                     lastScrubSeekNanos = nowNanos
@@ -2197,711 +924,196 @@ class TimelinePanel(private val context: EditorContext) :
                 }
             }
 
-            DragKind.IN_POINT -> dragCurrentNanos =
-                snap(nanosAt(mouseX), view, emptySet()).coerceIn(0L, outPoint(session))
-
-            DragKind.OUT_POINT -> dragCurrentNanos =
-                snap(nanosAt(mouseX), view, emptySet()).coerceIn(inPoint(session), duration)
-
-            DragKind.KEYFRAMES -> {
-                val anchor = dragTimes.minOrNull() ?: 0L
-                val raw = anchor + (nanosAt(mouseX) - dragOriginNanos)
-                val snapped = snap(raw, view, dragTimes)
-                dragDelta = maxOf(-anchor, snapped - anchor)
+            DragKind.IN_POINT -> dragCurrentNanos = snap(geometry.nanosAt(mouseX), Selection.NONE, true).coerceIn(0L, actions.outPoint(session))
+            DragKind.OUT_POINT -> dragCurrentNanos = snap(geometry.nanosAt(mouseX), Selection.NONE, true).coerceIn(actions.inPoint(session), duration)
+            DragKind.MOVE -> if (dragMoved) {
+                edgeScroll(view, mouseX)
+                lanes.duplicating = ImGui.getIO().keyAlt && session.selection.keyframeTimes.isNotEmpty()
+                val raw = dragAnchorNanos + (geometry.nanosAt(mouseX) - dragOriginNanos)
+                val delta = snap(raw, session.selection, true) - dragAnchorNanos
+                dragCurrentNanos = dragOriginNanos + maxOf(-minSelectedTime(session), delta)
             }
 
-            DragKind.VALUE_KEY, DragKind.VIEW_KEY, DragKind.PACK_KEY, DragKind.MARKER, DragKind.TIMELAPSE -> dragCurrentNanos =
-                snap(nanosAt(mouseX), view, emptySet()).coerceIn(0L, duration)
-
-            DragKind.CLIP_BODY -> {
-                val clip = session.project.clip(dragId as UUID) ?: return
-                val delta = snap(nanosAt(mouseX), view, emptySet()) - snap(dragOriginNanos, view, emptySet())
-                val shifted = (clip.startNanos + delta).coerceIn(0L, maxOf(0L, duration - clip.durationNanos))
-                dragClipStart = shifted
-                dragClipEnd = shifted + clip.durationNanos
-            }
-
-            DragKind.CLIP_START -> dragClipStart =
-                snap(nanosAt(mouseX), view, emptySet()).coerceIn(0L, dragClipEnd - Nanos.PER_TICK)
-
-            DragKind.CLIP_END -> dragClipEnd =
-                snap(nanosAt(mouseX), view, emptySet()).coerceIn(dragClipStart + Nanos.PER_TICK, duration)
-
-            DragKind.NAV_THUMB -> view.offsetNanos =
-                (navOriginOffset + navNanos(mouseX) - navNanos(dragStartMouseX)).coerceIn(
-                    0L,
-                    maxOf(0L, duration - visibleNanos)
-                )
-
+            DragKind.CLIP_START -> lanes.trimStart = snap(geometry.nanosAt(mouseX), session.selection, true).coerceIn(0L, lanes.trimEnd - Nanos.PER_TICK)
+            DragKind.CLIP_END -> lanes.trimEnd = snap(geometry.nanosAt(mouseX), session.selection, true).coerceIn(lanes.trimStart + Nanos.PER_TICK, duration)
+            DragKind.BOX -> if (dragMoved) edgeScroll(view, mouseX)
+            DragKind.NAV_THUMB -> view.offsetNanos = (navOriginOffset + navNanos(mouseX) - navNanos(dragStartX)).coerceIn(0L, maxOf(0L, duration - geometry.visibleNanos))
             DragKind.NAV_LEFT -> {
                 val end = navOriginOffset + navOriginVisible
-                val start =
-                    (navOriginOffset + navNanos(mouseX) - navNanos(dragStartMouseX)).coerceIn(0L, end - MIN_VISIBLE)
+                val start = (navOriginOffset + navNanos(mouseX) - navNanos(dragStartX)).coerceIn(0L, end - MIN_VISIBLE)
                 setVisible(view, start, end - start)
             }
 
             DragKind.NAV_RIGHT -> {
-                val end = (navOriginOffset + navOriginVisible + navNanos(mouseX) - navNanos(dragStartMouseX)).coerceIn(
-                    navOriginOffset + MIN_VISIBLE,
-                    duration
-                )
+                val end = (navOriginOffset + navOriginVisible + navNanos(mouseX) - navNanos(dragStartX)).coerceIn(navOriginOffset + MIN_VISIBLE, duration)
                 setVisible(view, navOriginOffset, end - navOriginOffset)
             }
 
+            DragKind.SCROLLBAR -> {
+                val viewport = geometry.tracksBottom - geometry.tracksTop
+                val overflow = geometry.contentHeight - viewport
+                if (overflow > 0f) geometry.scrollY = (scrollOrigin + (mouseY - dragStartY) * (geometry.contentHeight / viewport)).coerceIn(0f, overflow)
+            }
+
             else -> Unit
+        }
+    }
+
+    private fun minSelectedTime(session: EditorSession): Long {
+        val selection = session.selection
+        val project = session.project
+        var min = Long.MAX_VALUE
+        for (time in selection.keyframeTimes) min = minOf(min, time)
+        for (key in selection.valueKeys) min = minOf(min, key.nanos)
+        for (time in selection.viewTimes) min = minOf(min, time)
+        for (time in selection.packTimes) min = minOf(min, time)
+        for (id in selection.markerIds) project.marker(id)?.let { min = minOf(min, it.nanos) }
+        for (id in selection.timelapseIds) project.timelapse(id)?.let { min = minOf(min, it.nanos) }
+        for (id in selection.clipIds) project.clip(id)?.let { min = minOf(min, it.startNanos) }
+        for (id in selection.momentIds) project.moment(id)?.let { min = minOf(min, it.nanos) }
+        return if (min == Long.MAX_VALUE) 0L else min
+    }
+
+    private fun edgeScroll(view: TimelineView, mouseX: Float) {
+        val margin = EditorFonts.px(24f)
+        val step = (geometry.visibleNanos * 0.02).toLong()
+        val delta = when {
+            mouseX < geometry.originX + margin -> -step
+            mouseX > geometry.right - margin -> step
+            else -> 0L
+        }
+        if (delta != 0L) view.offsetNanos = (view.offsetNanos + delta).coerceIn(0L, maxOf(0L, duration - geometry.visibleNanos))
+    }
+
+    private fun release(session: EditorSession, mouseX: Float) {
+        when (drag) {
+            DragKind.SCRUB -> if (scrubTarget >= 0L) session.replay?.seek(scrubTarget)
+            DragKind.IN_POINT -> if (dragCurrentNanos != actions.inPoint(session)) session.execute(SetInOutPoints(dragCurrentNanos, actions.outPoint(session)))
+            DragKind.OUT_POINT -> if (dragCurrentNanos != actions.outPoint(session)) session.execute(SetInOutPoints(actions.inPoint(session), dragCurrentNanos))
+            DragKind.MOVE -> {
+                val item = dragItem
+                when {
+                    dragMoved -> actions.moveSelection(session, dragCurrentNanos - dragOriginNanos, lanes.duplicating)
+                    item != null && dragAdditiveToggle -> session.selection = session.selection.without(item)
+                    item != null && session.selection.count > 1 -> session.selection = session.selection.with(item, false)
+                }
+            }
+
+            DragKind.CLIP_START, DragKind.CLIP_END -> dragClip?.let { id ->
+                session.project.clip(id)?.let { actions.trimClip(session, it, lanes.trimStart, lanes.trimEnd) }
+            }
+
+            DragKind.BOX -> if (dragMoved) boxSelect(session) else {
+                if (!ImGui.getIO().keyCtrl && !ImGui.getIO().keyShift) {
+                    actions.clearSelection(session)
+                    context.selectedEntityId = null
+                }
+                session.replay?.seek(snap(geometry.nanosAt(mouseX), Selection.NONE, false).coerceIn(0L, duration))
+            }
+
+            else -> Unit
+        }
+        drag = DragKind.NONE
+        dragItem = null
+        dragClip = null
+        dragMoved = false
+        dragAdditiveToggle = false
+        lanes.trimClip = null
+        lanes.duplicating = false
+        scrubTarget = -1L
+        geometry.dragActive = false
+        geometry.dragDeltaNanos = 0L
+    }
+
+    private fun boxSelect(session: EditorSession) {
+        val x1 = minOf(dragStartX, ImGui.getMousePosX())
+        val x2 = maxOf(dragStartX, ImGui.getMousePosX())
+        val y1 = minOf(dragStartY, ImGui.getMousePosY())
+        val y2 = maxOf(dragStartY, ImGui.getMousePosY())
+        val from = geometry.nanosAt(x1)
+        val to = geometry.nanosAt(x2)
+        val additive = ImGui.getIO().keyCtrl || ImGui.getIO().keyShift
+        var selection = if (additive) session.selection else Selection.NONE
+        for (lane in geometry.lanes) {
+            if (!lane.selectable) continue
+            val top = geometry.laneTop(lane.kind)
+            if (y2 < top || y1 > top + geometry.laneHeight(lane.kind)) continue
+            selection = if (lane.kind == LaneKind.MOMENTS) selection.plus(gameLanes.moments(session).filter { it.endNanos >= from && it.nanos <= to }.map { TimelineItem.MomentItem(it.id) })
+            else selection.plus(cache.itemsBetween(lane.kind, from, to))
+        }
+        session.selection = selection
+        if (!selection.isEmpty) context.selectedEntityId = null
+    }
+
+    private fun prepareContext(session: EditorSession, mouseX: Float, mouseY: Float) {
+        contextNanos = geometry.nanosAt(mouseX).coerceIn(0L, duration)
+        contextLane = geometry.laneAt(mouseY)
+        val item = if (mouseY >= geometry.tracksTop && mouseY < geometry.tracksBottom) lanes.itemAt(session, mouseX, mouseY) else null
+        contextItem = item
+        if (item != null) {
+            if (!session.selection.has(item)) session.selection = session.selection.with(item, false)
+            menus.prepare(session, item)
+        }
+    }
+
+    private fun keyboard(session: EditorSession, hovered: Boolean) {
+        if (!(ImGui.isWindowFocused() || hovered) || ImGui.getIO().wantTextInput) return
+        val io = ImGui.getIO()
+        if (ImGui.isKeyPressed(ImGuiKey.Delete, false) || ImGui.isKeyPressed(ImGuiKey.Backspace, false)) actions.deleteSelection(session)
+        if (hovered && io.keyCtrl && ImGui.isKeyPressed(ImGuiKey.A, false)) actions.selectAll(session, cache, geometry.lanes)
+    }
+
+    private fun scrollBy(delta: Float) {
+        val viewport = geometry.tracksBottom - geometry.tracksTop
+        geometry.scrollY = (geometry.scrollY + delta).coerceIn(0f, maxOf(0f, geometry.contentHeight - viewport))
+    }
+
+    private fun follow(positionNanos: Long, view: TimelineView) {
+        val visible = geometry.visibleNanos
+        if (positionNanos < view.offsetNanos || positionNanos > view.offsetNanos + visible * 9 / 10) {
+            view.offsetNanos = (positionNanos - visible / 10).coerceIn(0L, maxOf(0L, duration - visible))
         }
     }
 
     private fun setVisible(view: TimelineView, offset: Long, visible: Long) {
         val clamped = visible.coerceIn(MIN_VISIBLE, duration)
         view.zoom = duration.toDouble() / clamped
-        visibleNanos = clamped
+        geometry.visibleNanos = clamped
         view.offsetNanos = offset.coerceIn(0L, maxOf(0L, duration - clamped))
     }
 
-    private fun finishDrag(session: EditorSession, view: TimelineView) {
-        when (drag) {
-            DragKind.SCRUB -> if (scrubTarget >= 0L) session.replay?.seek(scrubTarget)
-            DragKind.IN_POINT -> if (dragCurrentNanos != inPoint(session)) session.execute(
-                SetInOutPoints(
-                    dragCurrentNanos,
-                    outPoint(session)
-                )
-            )
-
-            DragKind.OUT_POINT -> if (dragCurrentNanos != outPoint(session)) session.execute(
-                SetInOutPoints(
-                    inPoint(
-                        session
-                    ), dragCurrentNanos
-                )
-            )
-
-            DragKind.KEYFRAMES -> if (dragDelta != 0L) {
-                if (dragDuplicate) {
-                    val created = HashSet<Long>()
-                    for (time in dragTimes) {
-                        val frame = session.project.camera.keyframeAt(time) ?: continue
-                        val target = time + dragDelta
-                        session.execute(SetCameraKeyframe(target, frame.pose, frame.easing, frame.mode))
-                        created += target
-                    }
-                    session.selection = Selection(keyframeTimes = created)
-                } else {
-                    session.execute(MoveKeyframes(dragTimes, dragDelta))
-                    session.selection = Selection(keyframeTimes = dragTimes.map { it + dragDelta }.toSet())
-                }
-            }
-
-            DragKind.VALUE_KEY -> {
-                val from = dragId as Long
-                val lane = dragLane
-                if (lane != null && dragCurrentNanos != from) {
-                    session.execute(MoveValueKeyframe(lane, from, dragCurrentNanos))
-                    session.selection = Selection(valueKeys = setOf(ValueKey(lane, dragCurrentNanos)))
-                }
-            }
-
-            DragKind.VIEW_KEY -> {
-                val from = dragId as Long
-                if (dragCurrentNanos != from) {
-                    session.execute(MoveViewKeyframe(from, dragCurrentNanos))
-                    session.selection = Selection(viewTimes = setOf(dragCurrentNanos))
-                }
-            }
-
-            DragKind.PACK_KEY -> {
-                val from = dragId as Long
-                if (dragCurrentNanos != from) {
-                    session.execute(MovePackKeyframe(from, dragCurrentNanos))
-                    session.selection = Selection(packTimes = setOf(dragCurrentNanos))
-                }
-            }
-
-            DragKind.MARKER -> {
-                val marker = session.project.marker(dragId as UUID)
-                if (marker != null && dragCurrentNanos != marker.nanos) session.execute(
-                    ReplaceMarker(
-                        marker.id,
-                        marker.copy(nanos = dragCurrentNanos)
-                    )
-                )
-            }
-
-            DragKind.TIMELAPSE -> {
-                val mark = session.project.timelapse(dragId as UUID)
-                if (mark != null && dragCurrentNanos != mark.nanos) session.execute(
-                    ReplaceTimelapse(
-                        mark.id,
-                        mark.copy(nanos = dragCurrentNanos)
-                    )
-                )
-            }
-
-            DragKind.CLIP_BODY, DragKind.CLIP_START, DragKind.CLIP_END -> {
-                val clip = session.project.clip(dragId as UUID)
-                if (clip != null && (clip.startNanos != dragClipStart || clip.endNanos != dragClipEnd)) {
-                    val updated = clip.trimmed(dragClipStart, dragClipEnd)
-                    session.execute(ReplaceClip(clip.id, updated))
-                    context.clips.save(updated)
-                }
-            }
-
-            DragKind.BOX -> boxSelect(session)
-            else -> Unit
-        }
-        drag = DragKind.NONE
-        dragId = null
-        dragTimes = emptySet()
-        dragDelta = 0L
-        dragDuplicate = false
-        dragLane = null
-        scrubTarget = -1L
-    }
-
-    private fun boxSelect(session: EditorSession) {
-        val x1 = minOf(dragStartMouseX, ImGui.getMousePosX())
-        val x2 = maxOf(dragStartMouseX, ImGui.getMousePosX())
-        val y1 = minOf(dragStartMouseY, ImGui.getMousePosY())
-        val y2 = maxOf(dragStartMouseY, ImGui.getMousePosY())
-        if (x2 - x1 < 3f && y2 - y1 < 3f) return
-        val from = nanosAt(x1)
-        val to = nanosAt(x2)
-        val additive = ImGui.getIO().keyCtrl
-        var selection = if (additive) session.selection else Selection.NONE
-        if (overlaps(y1, y2, LaneKind.CAMERA)) selection =
-            selection.copy(keyframeTimes = selection.keyframeTimes + keyTimes.filter { it in from..to })
-        for (lane in ValueLane.entries) {
-            if (overlaps(y1, y2, lane.kind)) selection = selection.copy(
-                valueKeys = selection.valueKeys + (valueKeys[lane] ?: emptyList()).filter { it.timeNanos in from..to }
-                    .map { ValueKey(lane, it.timeNanos) })
-        }
-        if (overlaps(y1, y2, LaneKind.VIEW)) selection =
-            selection.copy(viewTimes = selection.viewTimes + viewKeys.filter { it.timeNanos in from..to }
-                .map { it.timeNanos })
-        if (overlaps(y1, y2, LaneKind.TEXTURE_PACK)) selection =
-            selection.copy(packTimes = selection.packTimes + packKeys.filter { it.timeNanos in from..to }
-                .map { it.timeNanos })
-        if (overlaps(y1, y2, LaneKind.CLIPS)) selection =
-            selection.copy(clipIds = selection.clipIds + clips.filter { it.endNanos >= from && it.startNanos <= to }
-                .map { it.id })
-        if (overlaps(y1, y2, LaneKind.MARKERS)) selection =
-            selection.copy(markerIds = selection.markerIds + markers.filter { it.nanos in from..to }.map { it.id })
-        if (overlaps(y1, y2, LaneKind.TIMELAPSE)) selection =
-            selection.copy(timelapseIds = selection.timelapseIds + timelapses.filter { it.nanos in from..to }
-                .map { it.id })
-        session.selection = selection
-    }
-
-    private fun overlaps(y1: Float, y2: Float, kind: LaneKind): Boolean {
-        val top = laneTop(kind)
-        return y2 >= top && y1 <= top + laneHeight(kind)
-    }
-
-    private fun prepareContext(session: EditorSession) {
-        val mouseX = ImGui.getMousePosX()
-        val mouseY = ImGui.getMousePosY()
-        contextNanos = nanosAt(mouseX).coerceIn(0L, duration)
-        contextKeyframe = null
-        contextValue = null
-        contextView = null
-        contextPack = null
-        contextClip = null
-        contextMarker = null
-        contextTimelapse = null
-        contextPose = null
-        contextMoment = null
-        val lane = laneAt(mouseY)
-        contextLane = lane?.kind
-        when (lane?.kind) {
-            LaneKind.CAMERA -> nearestKeyframe(mouseX)?.let {
-                contextKeyframe = it.timeNanos
-                if (it.timeNanos !in session.selection.keyframeTimes) session.selection =
-                    Selection(keyframeTimes = setOf(it.timeNanos))
-            }
-
-            LaneKind.SPEED, LaneKind.FOV, LaneKind.TIME_OF_DAY, LaneKind.SHAKE, LaneKind.FREEZE, LaneKind.SHAKE_FREQUENCY, LaneKind.FOCUS -> {
-                val valueLane = ValueLane.entries.first { it.kind == lane.kind }
-                nearestValueKey(valueLane, mouseX)?.let {
-                    contextValue = ValueKey(valueLane, it.timeNanos)
-                    valueHolder[0] = it.value.toFloat()
-                    if (contextValue !in session.selection.valueKeys) session.selection =
-                        Selection(valueKeys = setOf(ValueKey(valueLane, it.timeNanos)))
-                }
-            }
-
-            LaneKind.VIEW -> nearestViewKey(mouseX)?.let {
-                contextView = it.timeNanos
-                if (it.timeNanos !in session.selection.viewTimes) session.selection =
-                    Selection(viewTimes = setOf(it.timeNanos))
-            }
-
-            LaneKind.TEXTURE_PACK -> nearestPackKey(mouseX)?.let {
-                contextPack = it.timeNanos
-                if (it.timeNanos !in session.selection.packTimes) session.selection =
-                    Selection(packTimes = setOf(it.timeNanos))
-            }
-
-            LaneKind.CLIPS -> clipAt(mouseX, mouseY)?.let {
-                contextClip = it.id
-                if (it.id !in session.selection.clipIds) session.selection = Selection(clipIds = setOf(it.id))
-            }
-
-            LaneKind.MARKERS -> markerAt(mouseX)?.let {
-                contextMarker = it.id
-                renameBuffer.set(it.label)
-                if (it.id !in session.selection.markerIds) session.selection = Selection(markerIds = setOf(it.id))
-            }
-
-            LaneKind.TIMELAPSE -> timelapseAt(mouseX)?.let {
-                contextTimelapse = it.id
-                if (it.id !in session.selection.timelapseIds) session.selection = Selection(timelapseIds = setOf(it.id))
-            }
-
-            LaneKind.POSE -> poseKeyAt(mouseX)?.let { contextPose = it }
-
-            LaneKind.MOMENTS -> gameLanes.momentAt(session, mouseX)?.let {
-                contextMoment = it.id
-                gameLanes.beginMomentMenu(it)
-                if (it.id !in session.selection.momentIds) session.selection = Selection(momentIds = setOf(it.id))
-            }
-
-            else -> Unit
-        }
-    }
-
-    private fun contextMenu(session: EditorSession) {
-        val replay = session.replay ?: return
-        val keyframe = contextKeyframe
-        val value = contextValue
-        val viewTime = contextView
-        val packTime = contextPack
-        val clipId = contextClip
-        val markerId = contextMarker
-        val timelapseId = contextTimelapse
-        val pose = contextPose
-        val momentId = contextMoment
-        when {
-            keyframe != null -> keyframeMenu(session, replay, keyframe)
-            momentId != null -> gameLanes.moments(session).firstOrNull { it.id == momentId }
-                ?.let { gameLanes.momentMenu(session, it) }
-
-            value != null -> valueMenu(session, value)
-            viewTime != null -> viewMenu(session, replay, viewTime)
-            packTime != null -> packMenu(session, replay, packTime)
-            clipId != null -> session.project.clip(clipId)?.let { clipMenu(session, replay, it) }
-            markerId != null -> session.project.marker(markerId)?.let { markerMenu(session, it) }
-            timelapseId != null -> session.project.timelapse(timelapseId)?.let { timelapseMenu(session, replay, it) }
-            pose != null -> poseMenu(session, replay, pose)
-
-            else -> emptyMenu(session, replay)
-        }
-    }
-
-    private fun keyframeMenu(session: EditorSession, replay: ReplaySession, time: Long) {
-        val frame = session.project.camera.keyframeAt(time) ?: return
-        val targets = session.selection.keyframeTimes.ifEmpty { setOf(time) }
-        Widgets.mutedText("Keyframe ${TimeFormat.clock(time)}${if (targets.size > 1) "  (${targets.size} selected)" else ""}")
-        ImGui.separator()
-        if (Menus.item("Go to keyframe")) replay.seek(time)
-        if (Menus.item("Update from current view")) session.execute(
-            SetCameraKeyframe(
-                time,
-                context.host.camera.currentPose(),
-                frame.easing,
-                frame.mode
-            )
-        )
-        if (Menus.item("Duplicate at playhead", "Ctrl+D")) {
-            session.execute(SetCameraKeyframe(replay.positionNanos, frame.pose, frame.easing, frame.mode))
-            session.selection = Selection(keyframeTimes = setOf(replay.positionNanos))
-        }
-        ImGui.separator()
-        if (ImGui.beginMenu("Interpolation")) {
-            for (mode in SegmentMode.entries) {
-                if (Menus.item(mode.label, "", frame.mode == mode)) session.execute(SetKeyframeMode(targets, mode))
-            }
-            ImGui.endMenu()
-        }
-        if (ImGui.beginMenu("Easing")) {
-            EasingWidgets.menu(frame.easing)?.let { session.execute(SetKeyframeEasing(targets, it)) }
-            ImGui.endMenu()
-        }
-        if (Menus.item("Easy ease", "F9")) session.execute(EaseKeyframes.easyEase(targets, emptySet()))
-        if (Menus.item("Ease in", "Shift+F9")) session.execute(EaseKeyframes.easeIn(targets, emptySet()))
-        if (Menus.item("Ease out", "Ctrl+Shift+F9")) session.execute(EaseKeyframes.easeOut(targets, emptySet()))
-        if (Menus.item("Edit curves in Graph Editor")) context.openPanel("Graph Editor")
-        ImGui.separator()
-        if (Menus.item(if (targets.size > 1) "Delete ${targets.size} keyframes" else "Delete keyframe", "Del")) {
-            session.execute(RemoveKeyframes(targets))
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun valueMenu(session: EditorSession, key: ValueKey) {
-        val lane = key.lane
-        val frame = session.project.valueTrack(lane).at(key.nanos) ?: return
-        Widgets.mutedText("${lane.label} keyframe ${TimeFormat.clock(key.nanos)}")
-        ImGui.separator()
-        ImGui.setNextItemWidth(200f)
-        Widgets.slider(
-            "##value",
-            valueHolder[0],
-            lane.min.toFloat(),
-            lane.max.toFloat(),
-            lane.format,
-            EditorFonts.px(200f),
-            labelOf = { lane.format(it.toDouble()) })?.let {
-            valueHolder[0] = it
-            session.execute(SetValueKeyframe(lane, key.nanos, it.toDouble(), frame.mode, frame.easing))
-        }
-        val presets = VALUE_PRESETS[lane]
-        if (presets != null) {
-            for ((index, preset) in presets.withIndex()) {
-                if (index > 0) ImGui.sameLine()
-                if (Widgets.smallButton(lane.format(preset))) {
-                    valueHolder[0] = preset.toFloat()
-                    session.execute(SetValueKeyframe(lane, key.nanos, preset, frame.mode, frame.easing))
-                }
-            }
-        }
-        ImGui.separator()
-        if (ImGui.beginMenu("Ramp")) {
-            for (mode in listOf(SegmentMode.LINEAR, SegmentMode.CATMULL_ROM, SegmentMode.HOLD)) {
-                if (Menus.item(mode.label, "", frame.mode == mode)) session.execute(
-                    SetValueKeyframe(
-                        lane,
-                        key.nanos,
-                        frame.value,
-                        mode,
-                        frame.easing
-                    )
-                )
-            }
-            ImGui.endMenu()
-        }
-        if (ImGui.beginMenu("Easing")) {
-            EasingWidgets.menu(frame.easing)?.let { session.execute(SetValueKeyframeEasing(setOf(key), it)) }
-            ImGui.endMenu()
-        }
-        if (Menus.item("Easy ease", "F9")) session.execute(EaseKeyframes.easyEase(emptySet(), setOf(key)))
-        if (Menus.item("Edit curves in Graph Editor")) context.openPanel("Graph Editor")
-        ImGui.separator()
-        if (Menus.item("Delete keyframe", "Del")) {
-            session.execute(RemoveValueKeyframes(setOf(key)))
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun viewMenu(session: EditorSession, replay: ReplaySession, time: Long) {
-        val frame = session.project.views.at(time) ?: return
-        val targets = session.selection.viewTimes.ifEmpty { setOf(time) }
-        Widgets.mutedText("${viewLabel(frame.value)} from ${TimeFormat.clock(time)}")
-        ImGui.separator()
-        if (Menus.item("Go to")) replay.seek(time)
-        if (Menus.item("Update from current camera settings")) session.execute(
-            SetViewKeyframe(
-                time,
-                ViewState.capture(context.host.camera.settings),
-                frame.mode,
-                frame.easing
-            )
-        )
-        if (Menus.item("Apply to camera now")) {
-            frame.value.applyTo(context.host.camera.settings)
-            context.host.camera.apply()
-        }
-        ImGui.separator()
-        if (ImGui.beginMenu("Interpolation")) {
-            for (mode in SegmentMode.entries) {
-                if (Menus.item(mode.label, "", frame.mode == mode)) session.execute(
-                    SetViewKeyframeMode(
-                        targets,
-                        mode
-                    )
-                )
-            }
-            ImGui.endMenu()
-        }
-        Widgets.tooltip("Hold snaps to this keyframe's camera mode/target/settings until the next one; Smooth blends orbit/follow/chase numbers into the next keyframe when it shares the same mode and target")
-        ImGui.separator()
-        if (Menus.item("Delete view keyframe", "Del")) {
-            session.execute(RemoveViewKeyframes(setOf(time)))
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun clipMenu(session: EditorSession, replay: ReplaySession, clip: Clip) {
-        Widgets.mutedText(clip.title)
-        ImGui.separator()
-        if (Menus.item("Play clip")) {
-            session.execute(SetInOutPoints(clip.startNanos, clip.endNanos))
-            replay.seek(clip.startNanos)
-            replay.play()
-        }
-        if (Menus.item("Set in/out to clip")) session.execute(SetInOutPoints(clip.startNanos, clip.endNanos))
-        if (Menus.item("Go to start")) replay.seek(clip.startNanos)
-        ImGui.separator()
-        if (Menus.item("Delete clip", "Del")) {
-            session.execute(RemoveClip(clip.id))
-            context.clips.delete(clip.id)
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun markerMenu(session: EditorSession, marker: TimelineMarker) {
-        Widgets.mutedText("Marker ${TimeFormat.clock(marker.nanos)}")
-        ImGui.separator()
-        ImGui.setNextItemWidth(180f)
-        if (ImGui.inputText("##rename", renameBuffer, imgui.flag.ImGuiInputTextFlags.EnterReturnsTrue)) {
-            session.execute(ReplaceMarker(marker.id, marker.copy(label = renameBuffer.get())))
-            ImGui.closeCurrentPopup()
-        }
-        for ((index, color) in MARKER_COLORS.withIndex()) {
-            if (index > 0) ImGui.sameLine()
-            if (Widgets.colorSwatch("color$index", color)) session.execute(
-                ReplaceMarker(
-                    marker.id,
-                    marker.copy(color = color)
-                )
-            )
-        }
-        if (ImGui.beginMenu("Type")) {
-            for (kind in MarkerKind.entries) if (Menus.item(kind.label, "", marker.kind == kind)) session.execute(
-                ReplaceMarker(
-                    marker.id,
-                    marker.copy(kind = kind, color = if (marker.kind == kind) marker.color else kind.color)
-                )
-            )
-            ImGui.endMenu()
-        }
-        ImGui.separator()
-        if (Menus.item("Go to marker")) session.replay?.seek(marker.nanos)
-        if (Menus.item("Delete marker", "Del")) {
-            session.execute(RemoveMarker(marker.id))
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun timelapseMenu(session: EditorSession, replay: ReplaySession, mark: TimelapseMark) {
-        Widgets.mutedText("Timelapse ${TimeFormat.clock(mark.nanos)}")
-        ImGui.separator()
-        ImGui.setNextItemWidth(160f)
-        Widgets.doubleSlider("##skip", mark.skipNanos / Nanos.PER_SECOND.toDouble(), 0.1, 300.0, "+%.1fs")?.let {
-            session.execute(ReplaceTimelapse(mark.id, mark.copy(skipNanos = (it * Nanos.PER_SECOND).toLong())))
-        }
-        ImGui.separator()
-        if (Menus.item("Go to")) replay.seek(mark.nanos)
-        if (Menus.item("Delete timelapse", "Del")) {
-            session.execute(RemoveTimelapse(mark.id))
-            session.selection = Selection.NONE
-        }
-    }
-
-    private fun emptyMenu(session: EditorSession, replay: ReplaySession) {
-        val at = contextNanos
-        Widgets.mutedText(TimeFormat.clock(at))
-        ImGui.separator()
-        if (Menus.item("Jump here")) replay.seek(at)
-        if (Menus.item("Add camera keyframe here", "Ctrl+K")) {
-            replay.seek(at)
-            session.execute(
-                SetCameraKeyframe(
-                    at,
-                    context.host.camera.currentPose(),
-                    session.defaultEasing,
-                    session.defaultKeyframeMode
-                )
-            )
-            session.selection = Selection(keyframeTimes = setOf(at))
-        }
-        val contextValueLane = ValueLane.entries.firstOrNull { it.kind == contextLane }
-        if (contextValueLane != null && Menus.item("Add ${contextValueLane.label.lowercase()} keyframe here")) addValueKeyframe(
-            session,
-            contextValueLane,
-            at
-        )
-        if (contextLane == LaneKind.VIEW && Menus.item("Add view keyframe here")) addViewKeyframe(session, at)
-        if (contextLane == LaneKind.TEXTURE_PACK && Menus.item("Add texture pack keyframe here")) addPackKeyframe(session, at)
-        if (contextLane == LaneKind.TIMELAPSE && Menus.item("Add timelapse skip here")) addTimelapse(session, at)
-        if (ImGui.beginMenu("Add keyframe")) {
-            for (lane in ValueLane.entries) if (Menus.item("${lane.label} keyframe")) addValueKeyframe(
-                session,
-                lane,
-                at
-            )
-            if (Menus.item("View keyframe")) addViewKeyframe(session, at)
-            if (Menus.item("Texture pack keyframe")) addPackKeyframe(session, at)
-            ImGui.endMenu()
-        }
-        if (contextLane == LaneKind.MOMENTS && Menus.item("Add moment here")) gameLanes.addManual(session, at)
-        if (Menus.item("Add marker here", "M")) addMarker(session, at)
-        if (Menus.item("Add timelapse skip here")) addTimelapse(session, at)
-        ImGui.separator()
-        if (Menus.item("Set in point here", "I")) session.execute(SetInOutPoints(at, maxOf(at, outPoint(session))))
-        if (Menus.item("Set out point here", "O")) session.execute(SetInOutPoints(minOf(inPoint(session), at), at))
-        if (Menus.item("Clip from in/out")) clipFromInOut(session)
-        ImGui.separator()
-        if (Menus.item("Zoom to fit")) {
-            context.timeline.zoom = 1.0
-            context.timeline.offsetNanos = 0L
-        }
-        if (Menus.item("Delete selection", "Del", false, !session.selection.isEmpty)) deleteSelection(session)
-    }
-
-    private fun addMarker(session: EditorSession, nanos: Long) {
-        val marker = TimelineMarker(
-            UUID.randomUUID(),
-            nanos,
-            "Marker ${session.project.markers.size + 1}",
-            MARKER_COLORS[session.project.markers.size % MARKER_COLORS.size]
-        )
-        session.execute(AddMarker(marker))
-        session.selection = Selection(markerIds = setOf(marker.id))
-    }
-
-    private fun addValueKeyframe(session: EditorSession, lane: ValueLane, nanos: Long) {
-        val current = currentValue(session, lane).coerceIn(lane.min, lane.max)
-        session.execute(
-            SetValueKeyframe(
-                lane,
-                nanos,
-                current,
-                if (lane == ValueLane.TIME_OF_DAY) SegmentMode.LINEAR else SegmentMode.LINEAR
-            )
-        )
-        session.selection = Selection(valueKeys = setOf(ValueKey(lane, nanos)))
-        val state = session.project.lane(lane.kind)
-        if (state.muted) session.execute(SetLaneState(lane.kind, state.copy(muted = false)))
-    }
-
-    private fun currentValue(session: EditorSession, lane: ValueLane): Double = when (lane) {
-        ValueLane.SPEED -> Math.abs(session.replay?.speed ?: 1.0)
-        ValueLane.FOV -> context.host.camera.currentPose().fov
-        ValueLane.TIME_OF_DAY -> (context.host.worldTimeOfDay()
-            ?: Math.floorMod(session.replay?.shadow?.world?.timeOfDay ?: 6000L, 24000L)).toDouble()
-
-        ValueLane.SHAKE -> context.host.camera.settings.shakeStrength
-        ValueLane.FREEZE -> ValueLane.FREEZE.default
-        ValueLane.SHAKE_FREQUENCY -> context.host.camera.settings.shakeFrequencyHz
-        ValueLane.FOCUS -> session.focusDistanceAt(session.playheadNanos, context.host.camera.currentPose().position)
-    }
-
-    private fun addViewKeyframe(session: EditorSession, nanos: Long) {
-        session.execute(SetViewKeyframe(nanos, ViewState.capture(context.host.camera.settings)))
-        session.selection = Selection(viewTimes = setOf(nanos))
-        val state = session.project.lane(LaneKind.VIEW)
-        if (state.muted) session.execute(SetLaneState(LaneKind.VIEW, state.copy(muted = false)))
-    }
-
-    private fun addTimelapse(session: EditorSession, nanos: Long) {
-        val mark = TimelapseMark(UUID.randomUUID(), nanos, DEFAULT_TIMELAPSE_SKIP)
-        session.execute(AddTimelapse(mark))
-        session.selection = Selection(timelapseIds = setOf(mark.id))
-        val state = session.project.lane(LaneKind.TIMELAPSE)
-        if (state.muted) session.execute(SetLaneState(LaneKind.TIMELAPSE, state.copy(muted = false)))
-    }
-
-    private fun clipFromInOut(session: EditorSession) {
-        val start = inPoint(session)
-        val end = outPoint(session)
-        if (end - start < Nanos.PER_TICK) {
-            context.status("Set in and out points first (I / O)")
-            return
-        }
-        val project = session.project
-        val clip =
-            Clip(UUID.randomUUID(), project.recording, project.sessionId, start, end, "Clip ${project.clips.size + 1}")
-        session.execute(AddClip(clip))
-        context.clips.save(clip)
-        session.selection = Selection(clipIds = setOf(clip.id))
-        context.status("Added ${clip.title}")
-    }
-
-    private fun deleteSelection(session: EditorSession) {
-        val selection = session.selection
-        if (selection.isEmpty) return
-        for (id in selection.clipIds) context.clips.delete(id)
-        session.deleteSelection()
-    }
-
-    private fun nearestKeyframe(mouseX: Float): CameraKeyframe? {
-        var best: CameraKeyframe? = null
-        var bestDistance = KEY_RADIUS + 4f
-        for (frame in keyframes) {
-            val distance = Math.abs(xAt(frame.timeNanos) - mouseX)
-            if (distance <= bestDistance) {
-                best = frame
-                bestDistance = distance
-            }
-        }
-        return best
-    }
-
-    private fun nearestValueKey(lane: ValueLane, mouseX: Float): Keyframe<Double>? =
-        (valueKeys[lane] ?: emptyList()).minByOrNull { Math.abs(xAt(it.timeNanos) - mouseX) }
-            ?.takeIf { Math.abs(xAt(it.timeNanos) - mouseX) <= 9f }
-
-    private fun nearestViewKey(mouseX: Float): Keyframe<ViewState>? =
-        viewKeys.lastOrNull { xAt(it.timeNanos) - 4f <= mouseX }?.takeIf { frame ->
-            val index = viewKeys.indexOf(frame)
-            val next = viewKeys.getOrNull(index + 1)?.timeNanos ?: duration
-            mouseX <= xAt(next) + 2f
-        }
-
-    private fun clipAt(mouseX: Float, mouseY: Float): Clip? {
-        val top = laneTop(LaneKind.CLIPS)
-        if (mouseY < top || mouseY >= top + laneHeight(LaneKind.CLIPS)) return null
-        return clips.lastOrNull { mouseX >= xAt(it.startNanos) - 2f && mouseX <= xAt(it.endNanos) + 2f }
-    }
-
-    private fun markerAt(mouseX: Float): TimelineMarker? =
-        markers.minByOrNull { Math.abs(xAt(it.nanos) + 4f - mouseX) }
-            ?.takeIf { Math.abs(xAt(it.nanos) + 4f - mouseX) <= 10f }
-
-    private fun timelapseAt(mouseX: Float): TimelapseMark? =
-        timelapses.minByOrNull { Math.abs(xAt(it.nanos) + 4f - mouseX) }
-            ?.takeIf { Math.abs(xAt(it.nanos) + 4f - mouseX) <= 10f }
-
-    private fun eventAt(session: EditorSession, mouseX: Float): TimelineEvent? =
-        session.events.events.minByOrNull { Math.abs(xAt(it.nanos) - mouseX) }
-            ?.takeIf { Math.abs(xAt(it.nanos) - mouseX) <= 6f }
-
-    private fun followPlayhead(positionNanos: Long, view: TimelineView) {
-        if (positionNanos < view.offsetNanos || positionNanos > view.offsetNanos + visibleNanos * 9 / 10) {
-            view.offsetNanos = (positionNanos - visibleNanos / 10).coerceIn(0L, maxOf(0L, duration - visibleNanos))
-        }
-    }
-
     private fun zoomAround(view: TimelineView, factor: Double, anchorNanos: Long) {
-        val before = visibleNanos
+        val before = geometry.visibleNanos
         view.zoom = (view.zoom * factor).coerceIn(1.0, duration.toDouble() / MIN_VISIBLE)
         val after = maxOf(1L, (duration / view.zoom).toLong())
         val ratio = (anchorNanos - view.offsetNanos).toDouble() / before
         view.offsetNanos = (anchorNanos - (after * ratio).toLong()).coerceIn(0L, maxOf(0L, duration - after))
-        visibleNanos = after
+        geometry.visibleNanos = after
+        geometry.offsetNanos = view.offsetNanos
     }
 
-    private fun snapMagnetic(nanos: Long, view: TimelineView): Long = snap(nanos, view, emptySet(), grid = false)
-
-    private fun snap(nanos: Long, view: TimelineView, exclude: Set<Long>, grid: Boolean = true): Long {
+    private fun snap(nanos: Long, exclude: Selection, grid: Boolean): Long {
+        val view = context.timeline
         if (!view.snapToTicks || ImGui.getIO().keyShift) return nanos
         val frame = view.frameNanos()
         var best = if (grid) Math.round(nanos.toDouble() / frame) * frame else nanos
-        val tolerance = (SNAP_PIXELS / width * visibleNanos).toLong()
-        var bestDistance = tolerance
-        val playhead = context.replay?.positionNanos
-        val candidates = ArrayList<Long>(8)
-        if (playhead != null) candidates += playhead
+        var bestDistance = (SNAP_PIXELS * geometry.nanosPerPixel).toLong()
         val session = context.session
+        val candidates = ArrayList<Long>(4)
+        context.replay?.let { candidates += it.positionNanos }
         if (session != null) {
-            candidates += inPoint(session)
-            candidates += outPoint(session)
+            candidates += actions.inPoint(session)
+            candidates += actions.outPoint(session)
         }
-        for (time in keyTimes) if (time !in exclude) candidates += time
-        for (marker in markers) candidates += marker.nanos
         for (candidate in candidates) {
-            val distance = Math.abs(candidate - nanos)
+            val distance = abs(candidate - nanos)
+            if (distance <= bestDistance) {
+                best = candidate
+                bestDistance = distance
+            }
+        }
+        for (candidate in cache.snapTimes(exclude)) {
+            val distance = abs(candidate - nanos)
             if (distance <= bestDistance) {
                 best = candidate
                 bestDistance = distance
@@ -2910,132 +1122,28 @@ class TimelinePanel(private val context: EditorContext) :
         return best
     }
 
-    private fun xAt(nanos: Long): Float =
-        originX + ((nanos - context.timeline.offsetNanos).toDouble() / visibleNanos * width).toFloat()
-
-    private fun nanosAt(x: Float): Long = context.timeline.offsetNanos + ((x - originX) / width * visibleNanos).toLong()
-
-    private fun rulerStep(view: TimelineView): Long {
-        val minimumPixels = 90f
-        val target = (minimumPixels / width * visibleNanos).toLong()
-        return RULER_STEPS.firstOrNull { it >= target } ?: RULER_STEPS.last()
-    }
-
-    private fun modeColor(mode: SegmentMode): EditorTheme.Rgb = when (mode) {
-        SegmentMode.CATMULL_ROM -> EditorTheme.KEYFRAME_SMOOTH
-        SegmentMode.LINEAR -> EditorTheme.KEYFRAME_LINEAR
-        SegmentMode.BEZIER -> EditorTheme.KEYFRAME_BEZIER
-        SegmentMode.HOLD -> EditorTheme.KEYFRAME_HOLD
-    }
-
     private companion object {
-        val DEFAULT_TIMELAPSE_SKIP = 5L * Nanos.PER_SECOND
-        val CORE_LANES = setOf(LaneKind.CAMERA, LaneKind.CLIPS, LaneKind.MARKERS, LaneKind.EVENTS)
-        val NO_BOX_LANES = setOf(LaneKind.EVENTS, LaneKind.PLAYERS, LaneKind.WORLD, LaneKind.MOMENTS)
-        val MARKER_ICONS = mapOf(
-            MarkerKind.MOMENT to Icon.BOOKMARK,
-            MarkerKind.SHOT to Icon.FILM,
-            MarkerKind.PLAYER to Icon.PERSON,
-            MarkerKind.EVENT to Icon.TARGET,
-            MarkerKind.CAMERA to Icon.CAMERA,
+        val INSPECTABLE = setOf(
+            LaneKind.CAMERA, LaneKind.SPEED, LaneKind.FOV, LaneKind.FOCUS, LaneKind.TIME_OF_DAY, LaneKind.SHAKE,
+            LaneKind.SHAKE_FREQUENCY, LaneKind.FREEZE, LaneKind.VIEW, LaneKind.TEXTURE_PACK
         )
-        val LANE_ICONS = mapOf(
-            LaneKind.CAMERA to Icon.PATH,
-            LaneKind.SPEED to Icon.GAUGE,
-            LaneKind.FOV to Icon.APERTURE,
-            LaneKind.TIME_OF_DAY to Icon.SUN,
-            LaneKind.SHAKE to Icon.WAVE,
-            LaneKind.SHAKE_FREQUENCY to Icon.WAVE,
-            LaneKind.VIEW to Icon.EYE,
-            LaneKind.FREEZE to Icon.SNOWFLAKE,
-            LaneKind.FOCUS to Icon.FOCUS,
-            LaneKind.TEXTURE_PACK to Icon.PACKAGE,
-            LaneKind.CLIPS to Icon.FILM,
-            LaneKind.MARKERS to Icon.MARKER,
-            LaneKind.TIMELAPSE to Icon.FAST_FORWARD,
-            LaneKind.POSE to Icon.PERSON,
-            LaneKind.EVENTS to Icon.CLOCK,
-            LaneKind.PLAYERS to Icon.PERSON,
-            LaneKind.WORLD to Icon.GLOBE,
-            LaneKind.MOMENTS to Icon.BOOKMARK,
+        val SEGMENT_COLORS = listOf(EditorTheme.ACCENT_TEXT, EditorTheme.WARNING, EditorTheme.SUCCESS, EditorTheme.KEYFRAME_BEZIER)
+        val FRAME_STEPS = longArrayOf(1, 2, 5, 10, 15, 30)
+        val SECOND_STEPS = longArrayOf(
+            Nanos.ofSeconds(1), Nanos.ofSeconds(2), Nanos.ofSeconds(5), Nanos.ofSeconds(10), Nanos.ofSeconds(15), Nanos.ofSeconds(30),
+            Nanos.ofSeconds(60), Nanos.ofSeconds(120), Nanos.ofSeconds(300), Nanos.ofSeconds(600), Nanos.ofSeconds(1800),
         )
-        val BASE_LANES = listOf(
-            Lane(LaneKind.CAMERA, "Camera", 30f, EditorTheme.KEYFRAME_SMOOTH),
-            Lane(LaneKind.SPEED, "Speed", 28f, EditorTheme.SUCCESS),
-            Lane(LaneKind.FOV, "FOV", 26f, EditorTheme.KEYFRAME_BEZIER),
-            Lane(LaneKind.FOCUS, "Focus", 26f, EditorTheme.MINT),
-            Lane(LaneKind.TIME_OF_DAY, "Time of day", 26f, EditorTheme.WARNING),
-            Lane(LaneKind.SHAKE, "Shake", 26f, EditorTheme.RECORD),
-            Lane(LaneKind.SHAKE_FREQUENCY, "Shake Hz", 24f, EditorTheme.RECORD),
-            Lane(LaneKind.VIEW, "View", 26f, EditorTheme.ACCENT_TEXT),
-            Lane(LaneKind.TEXTURE_PACK, "Texture pack", 26f, EditorTheme.PURPLE),
-            Lane(LaneKind.FREEZE, "Freeze", 24f, EditorTheme.TIMECODE),
-            Lane(LaneKind.CLIPS, "Clips", 32f, EditorTheme.CLIP_SELECTED),
-            Lane(LaneKind.MARKERS, "Markers", 24f, EditorTheme.MARKER),
-            Lane(LaneKind.TIMELAPSE, "Timelapse", 22f, EditorTheme.WARNING),
-            Lane(LaneKind.POSE, "Poses", 22f, EditorTheme.PURPLE),
-            Lane(LaneKind.EVENTS, "Events", 22f, EditorTheme.EVENT_OTHER),
-        )
-        val RULER_STEPS = longArrayOf(
-            Nanos.ofMillis(50),
-            Nanos.ofMillis(100),
-            Nanos.ofMillis(200),
-            Nanos.ofMillis(500),
-            Nanos.ofSeconds(1),
-            Nanos.ofSeconds(2),
-            Nanos.ofSeconds(5),
-            Nanos.ofSeconds(10),
-            Nanos.ofSeconds(15),
-            Nanos.ofSeconds(30),
-            Nanos.ofSeconds(60),
-            Nanos.ofSeconds(120),
-            Nanos.ofSeconds(300),
-            Nanos.ofSeconds(600),
-            Nanos.ofSeconds(1800),
-        )
-        val VALUE_PRESETS = mapOf(
-            ValueLane.SPEED to doubleArrayOf(0.25, 0.5, 1.0, 2.0, 4.0),
-            ValueLane.FOV to doubleArrayOf(30.0, 50.0, 70.0, 90.0, 110.0),
-            ValueLane.TIME_OF_DAY to doubleArrayOf(0.0, 6000.0, 12000.0, 18000.0),
-            ValueLane.SHAKE to doubleArrayOf(0.0, 0.5, 1.0, 2.0),
-            ValueLane.FREEZE to doubleArrayOf(0.5, 1.0, 2.0, 5.0),
-            ValueLane.SHAKE_FREQUENCY to doubleArrayOf(0.5, 1.6, 4.0, 10.0),
-            ValueLane.FOCUS to doubleArrayOf(2.0, 4.0, 8.0, 16.0, 32.0),
-        )
-        val VALUE_ADD_TOOLTIPS = mapOf(
-            ValueLane.SPEED to "Add speed keyframe with the current playback speed",
-            ValueLane.FOV to "Add FOV keyframe with the current field of view",
-            ValueLane.TIME_OF_DAY to "Add time-of-day keyframe with the current world time",
-            ValueLane.SHAKE to "Add camera shake keyframe with the current shake strength",
-            ValueLane.FREEZE to "Freeze the replay here for a number of seconds during playback and export",
-            ValueLane.SHAKE_FREQUENCY to "Add shake frequency keyframe with the current frequency",
-            ValueLane.FOCUS to "Add focus keyframe with the current focus distance",
-        )
-        val VALUE_HINTS = mapOf(
-            ValueLane.SPEED to "Speed ramps: add keyframes to slow down or speed up playback between them.",
-            ValueLane.FOV to "FOV keyframes zoom the lens over time, independent of the camera path.",
-            ValueLane.TIME_OF_DAY to "Time-of-day keyframes drive the sun and lighting; great for timelapses.",
-            ValueLane.SHAKE to "Shake keyframes ramp handheld camera shake in and out.",
-            ValueLane.SHAKE_FREQUENCY to "Controls how fast the shake wobbles; pair with the Shake lane for a rougher or smoother handheld feel.",
-            ValueLane.FREEZE to "Freeze keyframes hold the replay still for a few seconds while the camera keeps moving.",
-            ValueLane.FOCUS to "Focus keyframes rack the depth of field focus distance; turn on Depth of field in the Look panel to see it.",
-        )
-        val SEGMENT_COLORS =
-            listOf(EditorTheme.ACCENT_TEXT, EditorTheme.WARNING, EditorTheme.SUCCESS, EditorTheme.KEYFRAME_BEZIER)
-        val MARKER_COLORS = intArrayOf(0x59B36A, 0x66D4CF, 0xFFC94D, 0xE5484D, 0xC792EA, 0xF5A623, 0x8A8A8A, 0xFFFFFF)
-        val RULER_HEIGHT: Float get() = EditorFonts.px(24f)
-        val HEADER_WIDTH: Float get() = EditorFonts.px(156f)
-        val NAV_HEIGHT: Float get() = EditorFonts.px(12f)
+        val RULER_HEIGHT: Float get() = EditorFonts.px(30f)
+        val HEADER_WIDTH: Float get() = EditorFonts.px(176f)
+        val NAV_HEIGHT: Float get() = EditorFonts.px(10f)
         val NAV_GAP: Float get() = EditorFonts.px(6f)
         val TOOL_SIZE: Float get() = EditorFonts.px(26f)
-        val KEY_RADIUS: Float get() = EditorFonts.px(6.5f)
-        val EDGE_GRAB: Float get() = EditorFonts.px(7f)
-        val HANDLE_WIDTH: Float get() = EditorFonts.px(8f)
-        val HANDLE_HEIGHT: Float get() = EditorFonts.px(12f)
+        val HANDLE_WIDTH: Float get() = EditorFonts.px(6f)
+        val HANDLE_HEIGHT: Float get() = EditorFonts.px(11f)
         val SNAP_PIXELS: Float get() = EditorFonts.px(6f)
-        const val CURVE_STEP = 4f
-        const val MINOR_DIVISIONS = 5L
-        val EASE_GLYPH_MIN_WIDTH: Float get() = EditorFonts.px(28f)
+        val SCROLLBAR_WIDTH: Float get() = EditorFonts.px(5f)
+        val LABEL_SPACING: Float get() = EditorFonts.px(84f)
+        val DRAG_THRESHOLD: Float get() = EditorFonts.px(4f)
         val MIN_VISIBLE: Long = Nanos.ofMillis(250)
         val MIN_SCRUB_INTERVAL = Nanos.ofMillis(4)
     }

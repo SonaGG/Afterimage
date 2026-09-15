@@ -255,6 +255,7 @@ class ShadowClient(identity: RecorderIdentity = RecorderIdentity.UNKNOWN) : Stat
                 localPlayer.health = packet.health
                 localPlayer.food = packet.food
                 localPlayer.saturation = packet.saturation
+                if (packet.health > 0f) localPlayer.deadAtNanos = Long.MIN_VALUE
             }
 
             is SetExperience -> {

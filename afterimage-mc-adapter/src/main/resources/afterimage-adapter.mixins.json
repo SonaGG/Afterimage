@@ -30,7 +30,6 @@
     "GameGuiMixin",
     "GameRendererAccessor",
     "GameRendererMixin",
-    "HumanoidModelMixin",
     "InventoryMenuScreenMixin",
     "ItemInHandRendererAccessor",
     "ItemInHandRendererMixin",
