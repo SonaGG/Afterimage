@@ -8,7 +8,7 @@ import gg.sona.afterimage.editor.commands.SetLaneState
 import gg.sona.afterimage.editor.commands.SetLook
 import gg.sona.afterimage.editor.commands.SetValueKeyframe
 import gg.sona.afterimage.editor.look.LookSettings
-import gg.sona.afterimage.replay.state.shadow.EntityKind
+import gg.sona.afterimage.world.EntityKind
 import imgui.ImGui
 import java.nio.file.Files
 import java.nio.file.Path
@@ -79,7 +79,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
     }
 
     private fun focusPicker(session: EditorSession, look: LookSettings) {
-        val shadow = context.replay?.shadow
+        val shadow = context.replay?.world
         val recorderName = shadow?.localPlayer?.name ?: "Recorder"
         val current = look.focusTargetId
         val label = when (current) {
@@ -215,7 +215,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
     }
 
     private fun entityLabel(id: Int): String {
-        val shadow = context.replay?.shadow ?: return "#$id"
+        val shadow = context.replay?.world ?: return "#$id"
         val entity = shadow.entities[id] ?: return "#$id"
         val name = entity.uuid?.let { shadow.players.profile(it)?.name }
         return name ?: "${entity.kind.name.lowercase().replace('_', ' ')} #$id"

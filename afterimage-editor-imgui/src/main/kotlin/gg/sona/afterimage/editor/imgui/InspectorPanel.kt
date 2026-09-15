@@ -700,7 +700,7 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
     }
 
     private fun entity(session: EditorSession, target: InspectTarget.Entity) {
-        val shadow = session.replay?.shadow ?: return
+        val shadow = session.replay?.world ?: return
         val local = shadow.localPlayer
         val entity = shadow.entities[target.id]
         if (!target.isRecorder && entity == null) {
@@ -930,7 +930,7 @@ class InspectorPanel(private val context: EditorContext) : AbstractPanel("Inspec
     }
 
     private fun entityLabel(id: Int): String {
-        val shadow = context.replay?.shadow ?: return "#$id"
+        val shadow = context.replay?.world ?: return "#$id"
         val entity = shadow.entities[id] ?: return "#$id"
         return entity.uuid?.let { shadow.players.profile(it)?.name } ?: "#$id"
     }

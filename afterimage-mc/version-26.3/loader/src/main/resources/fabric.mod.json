@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "afterimage",
+  "version": "${version}",
+  "name": "Afterimage",
+  "description": "Recording, replay, cinematic camera, clipping and automatic highlight detection mod for Minecraft.",
+  "authors": [
+    {
+      "name": "Sona Interactive, Inc.",
+      "contact": {
+        "email": "company@cloverclient.com"
+      }
+    }
+  ],
+  "license": "ARR",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "gg.sona.afterimage.loader26.AfterimageMod"
+    ]
+  },
+  "depends": {
+    "minecraft": ">=26.3-",
+    "fabricloader": ">=0.15.0",
+    "afterimage-adapter": "*"
+  }
+}

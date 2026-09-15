@@ -10,7 +10,7 @@ import gg.sona.afterimage.clip.recording.trim.TrimJob
 import gg.sona.afterimage.core.time.Nanos
 import gg.sona.afterimage.editor.*
 import gg.sona.afterimage.editor.commands.*
-import gg.sona.afterimage.replay.state.shadow.EntityKind
+import gg.sona.afterimage.world.EntityKind
 import imgui.ImGui
 import imgui.flag.*
 import imgui.type.ImBoolean
@@ -521,7 +521,7 @@ class EditorWorkspace(val context: EditorContext) {
     }
 
     fun targetName(settings: CameraSettings): String {
-        val shadow = context.replay?.shadow ?: return "?"
+        val shadow = context.replay?.world ?: return "?"
         if (settings.targetsRecorder()) return shadow.localPlayer.name ?: "Recorder"
         val entity = shadow.entities[settings.targetEntityId] ?: return "#${settings.targetEntityId}"
         return entity.uuid?.let { shadow.players.profile(it)?.name } ?: "#${entity.id}"
@@ -530,7 +530,7 @@ class EditorWorkspace(val context: EditorContext) {
     fun targetMenu(session: EditorSession) {
         val control = context.host.camera
         val settings = control.settings
-        val shadow = session.replay?.shadow ?: return
+        val shadow = session.replay?.world ?: return
         val recorderName = shadow.localPlayer.name ?: "Recorder"
         if (Menus.item(recorderName, "", settings.targetsRecorder())) {
             settings.targetEntityId = CameraSettings.TARGET_RECORDER
@@ -1047,7 +1047,7 @@ class EditorWorkspace(val context: EditorContext) {
     private fun snapToRecorder() {
         val replay = context.replay ?: return
         val control = context.host.camera
-        val recorder = replay.shadow.localPlayer
+        val recorder = replay.world.localPlayer
         if (!recorder.hasPosition) return
         if (control.settings.mode != CameraMode.FREE) {
             control.settings.mode = CameraMode.FREE
@@ -1079,7 +1079,7 @@ class EditorWorkspace(val context: EditorContext) {
             control.frame(center.x, center.y, center.z, radius)
             return
         }
-        val shadow = context.replay?.shadow ?: return
+        val shadow = context.replay?.world ?: return
         val selected = context.selectedEntityId
         val entity = selected?.let { shadow.entities[it] }
         if (entity != null) {

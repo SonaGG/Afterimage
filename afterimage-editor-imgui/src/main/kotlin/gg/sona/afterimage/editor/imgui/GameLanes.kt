@@ -7,7 +7,6 @@ import gg.sona.afterimage.editor.MomentOrigin
 import gg.sona.afterimage.editor.Selection
 import gg.sona.afterimage.index.EntityTrack
 import gg.sona.afterimage.index.IndexEventKind
-import gg.sona.afterimage.index.Items
 import gg.sona.afterimage.index.ReplayIndex
 import gg.sona.afterimage.index.query.EventLabels
 import imgui.ImDrawList
@@ -647,7 +646,7 @@ class GameLanes(private val context: EditorContext, private val geometry: Timeli
         val chips = ArrayList<String>()
         chips += if (health.isNaN()) "Health unknown" else String.format("%.1f hearts", health / 2f)
         val held = track.held[i].toInt()
-        if (held >= 0) chips += Items.label(held)
+        if (held >= 0) chips += index.names.itemLabel(held)
         if (track.flag(tick, EntityTrack.FLAG_SPRINTING)) chips += "Sprinting"
         if (track.flag(tick, EntityTrack.FLAG_SNEAKING)) chips += "Sneaking"
         if (track.flag(tick, EntityTrack.FLAG_USING)) chips += "Using item"

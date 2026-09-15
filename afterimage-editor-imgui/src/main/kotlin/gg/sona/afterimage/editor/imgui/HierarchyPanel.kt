@@ -4,10 +4,10 @@ import gg.sona.afterimage.camera.CameraMode
 import gg.sona.afterimage.camera.CameraPose
 import gg.sona.afterimage.editor.*
 import gg.sona.afterimage.editor.commands.*
-import gg.sona.afterimage.protocol.MetadataEntry
-import gg.sona.afterimage.replay.state.shadow.EntityKind
-import gg.sona.afterimage.replay.state.shadow.ShadowClient
-import gg.sona.afterimage.replay.state.shadow.ShadowEntity
+import gg.sona.afterimage.world.EntityKind
+import gg.sona.afterimage.world.EntityState
+import gg.sona.afterimage.world.GameNames
+import gg.sona.afterimage.world.WorldState
 import imgui.ImGui
 import imgui.flag.ImGuiMouseButton
 import imgui.flag.ImGuiWindowFlags
@@ -48,7 +48,7 @@ class HierarchyPanel(private val context: EditorContext) :
         ImGui.dummy(0f, EditorFonts.px(2f))
         if (frame.nowNanos - lastRefreshNanos > REFRESH_NANOS || rows.isEmpty()) {
             lastRefreshNanos = frame.nowNanos
-            rows = collect(replay.shadow, context.host.camera.currentPose())
+            rows = collect(replay.world, replay.names, context.host.camera.currentPose())
         }
         val query = filter.get().trim().lowercase()
         ImGui.beginChild("##hierarchy-tree", 0f, 0f, false, ImGuiWindowFlags.None)
@@ -608,7 +608,7 @@ class HierarchyPanel(private val context: EditorContext) :
         return pressed
     }
 
-    private fun collect(shadow: ShadowClient, camera: CameraPose): List<Row> {
+    private fun collect(shadow: WorldState, names: GameNames, camera: CameraPose): List<Row> {
         val result = ArrayList<Row>(shadow.entities.size + 1)
         val local = shadow.localPlayer
         if (local.hasPosition) {
@@ -632,14 +632,13 @@ class HierarchyPanel(private val context: EditorContext) :
             val name = when {
                 profile != null -> profile.name
                 entity.isPlayer -> "Player #${entity.id}"
-                else -> kindLabel(entity)
+                else -> kindLabel(names, entity)
             }
-            val health = entity.metadata[HEALTH_INDEX]?.takeIf { it.type == MetadataEntry.FLOAT }
-                ?.let { healthText((it.value as Float).toDouble()) } ?: ""
+            val health = entity.health.takeIf { !it.isNaN() }?.let { healthText(it.toDouble()) } ?: ""
             result += Row(
                 entity.id,
                 name,
-                kindLabel(entity),
+                kindLabel(names, entity),
                 entity.isPlayer,
                 false,
                 health,
@@ -655,18 +654,11 @@ class HierarchyPanel(private val context: EditorContext) :
 
     private fun healthText(health: Double): String = if (health <= 0.0) "" else String.format("%.0f", health)
 
-    private fun kindLabel(entity: ShadowEntity): String = when (entity.kind) {
-        EntityKind.PLAYER -> "player"
-        EntityKind.MOB -> MOB_NAMES[entity.type] ?: "mob ${entity.type}"
-        EntityKind.OBJECT -> OBJECT_NAMES[entity.type] ?: "object ${entity.type}"
-        EntityKind.PAINTING -> "painting"
-        EntityKind.EXPERIENCE_ORB -> "xp orb"
-        EntityKind.GLOBAL -> "lightning"
-    }
+    private fun kindLabel(names: GameNames, entity: EntityState): String =
+        if (entity.kind == EntityKind.PLAYER) "player" else names.entityLabel(entity.kind, entity.type, entity.id)
 
     companion object {
         val ROW_HEIGHT: Float get() = EditorFonts.px(24f)
-        const val HEALTH_INDEX = 6
         val MARKER_ICONS = mapOf(
             MarkerKind.MOMENT to Icon.BOOKMARK,
             MarkerKind.SHOT to Icon.FILM,
@@ -687,65 +679,6 @@ class HierarchyPanel(private val context: EditorContext) :
             LaneKind.FREEZE to Icon.SNOWFLAKE,
             LaneKind.FOCUS to Icon.FOCUS,
             LaneKind.TEXTURE_PACK to Icon.PACKAGE,
-        )
-        val MOB_NAMES = mapOf(
-            48 to "mob",
-            49 to "monster",
-            50 to "creeper",
-            51 to "skeleton",
-            52 to "spider",
-            53 to "giant",
-            54 to "zombie",
-            55 to "slime",
-            56 to "ghast",
-            57 to "zombie pigman",
-            58 to "enderman",
-            59 to "cave spider",
-            60 to "silverfish",
-            61 to "blaze",
-            62 to "magma cube",
-            63 to "ender dragon",
-            64 to "wither",
-            65 to "bat",
-            66 to "witch",
-            67 to "endermite",
-            68 to "guardian",
-            90 to "pig",
-            91 to "sheep",
-            92 to "cow",
-            93 to "chicken",
-            94 to "squid",
-            95 to "wolf",
-            96 to "mooshroom",
-            97 to "snow golem",
-            98 to "ocelot",
-            99 to "iron golem",
-            100 to "horse",
-            101 to "rabbit",
-            120 to "villager",
-        )
-        val OBJECT_NAMES = mapOf(
-            1 to "boat",
-            2 to "item",
-            10 to "minecart",
-            50 to "tnt",
-            51 to "ender crystal",
-            60 to "arrow",
-            61 to "snowball",
-            62 to "egg",
-            63 to "fireball",
-            64 to "small fireball",
-            65 to "ender pearl",
-            66 to "wither skull",
-            70 to "falling block",
-            71 to "item frame",
-            72 to "eye of ender",
-            73 to "potion",
-            75 to "exp bottle",
-            76 to "firework",
-            77 to "leash knot",
-            78 to "armor stand",
-            90 to "fishing hook",
         )
     }
 }

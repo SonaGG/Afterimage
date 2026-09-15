@@ -566,14 +566,14 @@ class TimelineLanes(
     private fun viewChips(view: ViewState): List<String> {
         if (view.mode == CameraMode.FREE) return listOf("Free camera")
         val target =
-            if (view.targetEntityId == CameraSettings.TARGET_RECORDER) context.replay?.shadow?.localPlayer?.name ?: "recorder"
+            if (view.targetEntityId == CameraSettings.TARGET_RECORDER) context.replay?.world?.localPlayer?.name ?: "recorder"
             else entityName(view.targetEntityId)
         return listOf(view.mode.label, target)
     }
 
     fun viewLabel(view: ViewState): String {
         val target =
-            if (view.targetEntityId == CameraSettings.TARGET_RECORDER) context.replay?.shadow?.localPlayer?.name ?: "recorder"
+            if (view.targetEntityId == CameraSettings.TARGET_RECORDER) context.replay?.world?.localPlayer?.name ?: "recorder"
             else entityName(view.targetEntityId)
         return if (view.mode == CameraMode.FREE) "Free camera" else "${view.mode.label}   $target"
     }
@@ -582,7 +582,7 @@ class TimelineLanes(
         if (state.isDefault) "Default textures" else state.packs.joinToString(", ") { it.removeSuffix(".zip") }
 
     private fun entityName(id: Int): String {
-        val shadow = context.replay?.shadow ?: return "#$id"
+        val shadow = context.replay?.world ?: return "#$id"
         val entity = shadow.entities[id] ?: return "#$id"
         return entity.uuid?.let { shadow.players.profile(it)?.name } ?: "#$id"
     }

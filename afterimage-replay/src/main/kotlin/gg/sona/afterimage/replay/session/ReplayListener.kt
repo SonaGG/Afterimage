@@ -10,4 +10,6 @@ interface ReplayListener {
     fun onSpeedChanged(speed: Double) {}
 
     fun onReachedEnd() {}
+
+    fun onSettleStart(positionNanos: Long) {}
 }

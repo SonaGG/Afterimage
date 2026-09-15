@@ -1,7 +1,6 @@
 package gg.sona.afterimage.index.query
 
 import gg.sona.afterimage.index.EntityTrack
-import gg.sona.afterimage.index.Items
 import gg.sona.afterimage.index.ReplayIndex
 import kotlin.math.cos
 import kotlin.math.sin
@@ -195,12 +194,12 @@ class Compiler(private val index: ReplayIndex) {
                 if (args.size == 1) Node { tick ->
                     val ta = a.at(tick) ?: return@Node Value.Missing
                     val id = ta.held[ta.index(tick)].toInt()
-                    if (id < 0) Value.Str("") else Value.Str(Items.name(id) ?: id.toString())
+                    if (id < 0) Value.Str("") else Value.Str(index.names.itemName(id) ?: id.toString())
                 } else {
                     val item = textArg(1)
                     Node { tick ->
                         val ta = a.at(tick) ?: return@Node Value.FALSE
-                        Value.of(Items.matches(ta.held[ta.index(tick)].toInt(), item))
+                        Value.of(index.names.itemMatches(ta.held[ta.index(tick)].toInt(), item))
                     }
                 }
             }
@@ -211,7 +210,7 @@ class Compiler(private val index: ReplayIndex) {
                 Node { tick ->
                     val ta = a.at(tick) ?: return@Node Value.Missing
                     val id = ta.held[ta.index(tick)].toInt()
-                    if (id < 0) Value.Str("") else Value.Str(Items.name(id) ?: id.toString())
+                    if (id < 0) Value.Str("") else Value.Str(index.names.itemName(id) ?: id.toString())
                 }
             }
 
@@ -222,7 +221,7 @@ class Compiler(private val index: ReplayIndex) {
                 Node { tick ->
                     val ta = a.at(tick) ?: return@Node Value.FALSE
                     val i = ta.index(tick)
-                    Value.of(ta.armor.any { Items.matches(it[i].toInt(), item) })
+                    Value.of(ta.armor.any { index.names.itemMatches(it[i].toInt(), item) })
                 }
             }
 

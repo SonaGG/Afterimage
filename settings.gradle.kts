@@ -12,8 +12,11 @@ rootProject.name = "afterimage"
 
 include(
     "afterimage-core",
+    "afterimage-world",
+    "afterimage-gfx",
+    "afterimage-gfx-gl",
     "afterimage-net",
-    "afterimage-protocol",
+    "afterimage-packets",
     "afterimage-format",
     "afterimage-capture",
     "afterimage-replay",
@@ -24,6 +27,11 @@ include(
     "afterimage-editor-core",
     "afterimage-editor-imgui",
     "afterimage-render",
-    "afterimage-mc-adapter",
-    "afterimage-loader",
+    "afterimage-mc:common",
+    "afterimage-mc:version-1.8.9:protocol",
+    "afterimage-mc:version-1.8.9:state",
+    "afterimage-mc:version-1.8.9:adapter",
+    "afterimage-mc:version-1.8.9:loader",
+    "afterimage-mc:version-26.3:adapter",
+    "afterimage-mc:version-26.3:loader",
 )

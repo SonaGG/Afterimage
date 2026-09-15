@@ -27,6 +27,7 @@ class AfterimageWriter(
     private val segments = ArrayList<SegmentInfo>()
     private val blobs = ArrayList<BlobRef>()
     private val knownChunks = HashSet<Long>()
+    private val chunkFormat = ChunkPacketFormat.forProtocol(header.protocolVersion)
     private var pendingCount = 0
     private var pendingStartNanos = 0L
     private var pendingLastNanos = 0L
@@ -88,7 +89,7 @@ class AfterimageWriter(
 
     private fun transform(packet: CapturedPacket): List<CapturedPacket> {
         if (!options.dedupeChunks) return listOf(packet)
-        val chunks = ChunkBlobs.chunksOf(packet) ?: return listOf(packet)
+        val chunks = chunkFormat.chunksOf(packet) ?: return listOf(packet)
         val result = ArrayList<CapturedPacket>(chunks.size)
         for (chunk in chunks) {
             val hash = ChunkBlobs.hash(chunk.mask, chunk.skyLight, chunk.data)

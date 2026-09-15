@@ -4,5 +4,5 @@ plugins {
 
 dependencies {
     api(project(":afterimage-capture"))
-    api(project(":afterimage-protocol"))
+    api(project(":afterimage-world"))
 }

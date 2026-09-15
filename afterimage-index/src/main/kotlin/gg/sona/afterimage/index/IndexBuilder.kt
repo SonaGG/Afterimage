@@ -7,12 +7,15 @@ import gg.sona.afterimage.flashback.EventDeriver
 import gg.sona.afterimage.flashback.SemanticEvent
 import gg.sona.afterimage.flashback.SemanticEventListener
 import gg.sona.afterimage.net.PackedPosition
-import gg.sona.afterimage.protocol.*
+import gg.sona.afterimage.replay.protocol.ReplayProtocols
 import gg.sona.afterimage.replay.source.ReplaySource
-import gg.sona.afterimage.replay.state.shadow.EntityKind
-import gg.sona.afterimage.replay.state.shadow.RecorderIdentity
-import gg.sona.afterimage.replay.state.shadow.ShadowClient
-import gg.sona.afterimage.replay.state.shadow.ShadowEntity
+import gg.sona.afterimage.world.EntityKind
+import gg.sona.afterimage.world.EntityState
+import gg.sona.afterimage.world.GameNames
+import gg.sona.afterimage.world.RecorderIdentity
+import gg.sona.afterimage.world.WorldEvent
+import gg.sona.afterimage.world.WorldEventSink
+import gg.sona.afterimage.world.WorldState
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.cos
 import kotlin.math.sin
@@ -22,14 +25,17 @@ class IndexBuilder(
     private val source: ReplaySource,
     identity: RecorderIdentity,
     private val tickNanos: Long = Nanos.PER_TICK,
-) {
+) : WorldEventSink {
     @Volatile
     var progress: Double = 0.0
         private set
 
     private val cancelled = AtomicBoolean(false)
-    private val shadow = ShadowClient(identity)
-    private val deriver = EventDeriver(shadow)
+    private val protocol = ReplayProtocols.forVersion(source.header.protocolVersion)
+    private val tracker = protocol.createState(identity)
+    private val world: WorldState = tracker.world
+    private val names: GameNames = GameNames.forProtocol(source.header.protocolVersion)
+    private val deriver = EventDeriver(world)
 
     private val open = IntObjectMap<TrackBuilder>(256)
     private val closed = ArrayList<EntityTrack>()
@@ -68,11 +74,7 @@ class IndexBuilder(
                     sample()
                     nextTick += tickNanos
                 }
-                val decoded = PacketCodec.decode(packet) ?: continue
-                before(decoded, nanos)
-                shadow.apply(decoded, nanos)
-                after(decoded, nanos)
-                deriver.derive(decoded, nanos)
+                tracker.apply(packet, this)
             }
             progress = ((segment.endNanos - startNanos).toDouble() / duration).coerceIn(0.0, 0.99)
         }
@@ -87,6 +89,7 @@ class IndexBuilder(
         closed.sortWith(compareBy({ it.firstTick }, { it.entityId }))
         progress = 1.0
         return ReplayIndex(
+            source.header.protocolVersion,
             startNanos,
             endNanos,
             tickNanos,
@@ -100,10 +103,11 @@ class IndexBuilder(
 
     private fun sample() {
         val tick = sampled
-        dimensions.add(shadow.world.dimension)
-        val local = shadow.localPlayer
+        dimensions.add(world.dimension)
+        val local = world.localPlayer
         if (local.hasPosition) {
             val track = localTrack?.takeIf { it.entityId == local.entityId } ?: TrackBuilder(
+                names,
                 local.entityId,
                 EntityKind.PLAYER,
                 0,
@@ -125,12 +129,12 @@ class IndexBuilder(
                 local.pitch,
                 local.yaw,
                 local.health,
-                local.heldItem.id,
-                local.equipmentItem(1).id,
-                local.equipmentItem(2).id,
-                local.equipmentItem(3).id,
-                local.equipmentItem(4).id,
-                (local.flagsByte() and 0x3F) or (if (local.onGround) EntityTrack.FLAG_ON_GROUND else 0),
+                local.held?.id ?: -1,
+                local.equipment(1)?.id ?: -1,
+                local.equipment(2)?.id ?: -1,
+                local.equipment(3)?.id ?: -1,
+                local.equipment(4)?.id ?: -1,
+                (local.flags and 0x3F) or (if (local.onGround) EntityTrack.FLAG_ON_GROUND else 0),
                 local.vehicleId
             )
         } else {
@@ -139,58 +143,35 @@ class IndexBuilder(
         }
         var stale: ArrayList<Int>? = null
         open.forEach { id, track ->
-            if (!track.sampleFrom(shadow)) (stale ?: ArrayList<Int>().also { stale = it }).add(id)
+            if (!track.sampleFrom(world)) (stale ?: ArrayList<Int>().also { stale = it }).add(id)
         }
         stale?.forEach { id -> open.remove(id)?.close(tick - 1)?.let { closed += it } }
         sampled++
     }
 
-    private fun before(packet: PlayPacket, nanos: Long) {
-        when (packet) {
-            is BlockChange -> blockChange(
-                nanos,
-                PackedPosition.x(packet.position),
-                PackedPosition.y(packet.position),
-                PackedPosition.z(packet.position),
-                packet.blockState,
-                -1
+    override fun onEvent(event: WorldEvent) {
+        val nanos = event.nanos
+        val local = world.localPlayer
+        when (event) {
+            is WorldEvent.BlockChanged -> blockChange(nanos, event.x, event.y, event.z, event.state, event.byEntity)
+            is WorldEvent.UseItem -> events.add(
+                nanos, sampled, if (event.using) IndexEventKind.USE_START else IndexEventKind.USE_END, event.entityId, -1,
+                Double.NaN, Double.NaN, Double.NaN, 0f, event.item?.label
             )
 
-            is MultiBlockChange -> {
-                val baseX = packet.chunkX shl 4
-                val baseZ = packet.chunkZ shl 4
-                for ((x, y, z, state) in packet.records) blockChange(nanos, baseX + x, y, baseZ + z, state, -1)
-            }
-
-            is LocalBlockChange -> blockChange(
-                nanos,
-                PackedPosition.x(packet.position),
-                PackedPosition.y(packet.position),
-                PackedPosition.z(packet.position),
-                packet.state,
-                shadow.localPlayer.entityId
+            is WorldEvent.Equipped -> events.add(
+                nanos, sampled, IndexEventKind.EQUIP, event.entityId, -1,
+                Double.NaN, Double.NaN, Double.NaN, event.slot.toFloat(), event.item?.label
             )
 
-            is EntityMetadata -> useFlag(packet, nanos)
-            is EntityEquipment -> {
-                val entity = shadow.entities[packet.entityId] ?: return
-                if (packet.slot !in 0..4) return
-                val previous = entity.equipment[packet.slot]?.id ?: -1
-                if (previous == packet.item.id) return
-                events.add(
-                    nanos, sampled, IndexEventKind.EQUIP, packet.entityId, -1,
-                    Double.NaN, Double.NaN, Double.NaN, packet.slot.toFloat(),
-                    if (packet.item.isEmpty) null else Items.label(packet.item.id)
-                )
-            }
-
-            is DestroyEntities -> for (id in packet.entityIds) {
-                val entity = shadow.entities[id] ?: continue
-                if (entity.kind == EntityKind.OBJECT && entity.type in EntityNames.PROJECTILES) {
+            is WorldEvent.EntityRemoved -> {
+                val id = event.entityId
+                val entity = world.entities[id]
+                if (entity != null && entity.isProjectile) {
                     val shooter = open[id]?.shooterId ?: -1
                     events.add(
                         nanos, sampled, IndexEventKind.PROJECTILE_END, id, shooter,
-                        entity.x, entity.y, entity.z, 0f, EntityNames.OBJECTS[entity.type]
+                        entity.x, entity.y, entity.z, 0f, names.entityName(entity.kind, entity.type)
                     )
                     projectileEnds.addLast(ProjectileEnd(nanos, shooter, entity.x, entity.y, entity.z))
                     if (projectileEnds.size > 64) projectileEnds.removeFirst()
@@ -198,204 +179,117 @@ class IndexBuilder(
                 open.remove(id)?.close(sampled - 1)?.let { closed += it }
             }
 
-            is JoinGame -> {
+            is WorldEvent.WorldJoined -> {
                 lastAttacker.clear()
                 lastHealth = Float.NaN
                 open.forEach { _, track -> track.close(sampled - 1)?.let { closed += it } }
                 open.clear()
             }
 
-            is Respawn -> if (packet.dimension != shadow.world.dimension) {
+            is WorldEvent.DimensionChanged -> {
                 open.forEach { _, track -> track.close(sampled - 1)?.let { closed += it } }
                 open.clear()
                 events.add(
-                    nanos, sampled, IndexEventKind.DIMENSION, shadow.localPlayer.entityId, -1,
-                    Double.NaN, Double.NaN, Double.NaN, packet.dimension.toFloat(), dimensionName(packet.dimension)
+                    nanos, sampled, IndexEventKind.DIMENSION, local.entityId, -1,
+                    Double.NaN, Double.NaN, Double.NaN, event.dimension.toFloat(), world.dimensionName(event.dimension)
                 )
             }
 
-            else -> Unit
-        }
-    }
-
-    private fun after(packet: PlayPacket, nanos: Long) {
-        when (packet) {
-            is SpawnPlayer -> spawned(packet.entityId, -1)
-            is SpawnMob -> spawned(packet.entityId, -1)
-            is SpawnObject -> {
-                val entity = shadow.entities[packet.entityId] ?: return
-                val shooter = if (packet.type in EntityNames.PROJECTILES) shooterOf(packet, entity) else -1
-                spawned(packet.entityId, shooter)
-                if (packet.type in EntityNames.PROJECTILES) events.add(
-                    nanos, sampled, IndexEventKind.PROJECTILE_SPAWN, packet.entityId, shooter,
-                    entity.x, entity.y, entity.z, 0f, EntityNames.OBJECTS[packet.type]
+            is WorldEvent.EntitySpawned -> {
+                val entity = world.entities[event.entityId] ?: return
+                val shooter = if (entity.isProjectile) (if (event.shooterHint >= 0) event.shooterHint else nearestPlayer(entity)) else -1
+                spawned(event.entityId, shooter)
+                if (entity.isProjectile) events.add(
+                    nanos, sampled, IndexEventKind.PROJECTILE_SPAWN, event.entityId, shooter,
+                    entity.x, entity.y, entity.z, 0f, names.entityName(entity.kind, entity.type)
                 )
             }
 
-            is SpawnPainting -> spawned(packet.entityId, -1)
-            is SpawnExperienceOrb -> spawned(packet.entityId, -1)
-            is SpawnGlobalEntity -> spawned(packet.entityId, -1)
-
-            is ClientArmSwing -> {
-                val local = shadow.localPlayer.entityId
-                lastSwing.put(local, nanos)
-                events.add(
-                    nanos,
-                    sampled,
-                    IndexEventKind.SWING,
-                    local,
-                    -1,
-                    Double.NaN,
-                    Double.NaN,
-                    Double.NaN,
-                    0f,
-                    null
-                )
+            is WorldEvent.ArmSwing -> {
+                lastSwing.put(event.entityId, nanos)
+                events.add(nanos, sampled, IndexEventKind.SWING, event.entityId, -1, Double.NaN, Double.NaN, Double.NaN, 0f, null)
             }
 
-            is Animation -> when (packet.animation) {
-                Animation.SWING_ARM -> {
-                    lastSwing.put(packet.entityId, nanos)
-                    events.add(
-                        nanos,
-                        sampled,
-                        IndexEventKind.SWING,
-                        packet.entityId,
-                        -1,
-                        Double.NaN,
-                        Double.NaN,
-                        Double.NaN,
-                        0f,
-                        null
-                    )
-                }
-
-                Animation.CRITICAL_EFFECT, Animation.MAGIC_CRITICAL_EFFECT -> events.add(
-                    nanos, sampled, IndexEventKind.CRIT, packet.entityId, lastAttacker[packet.entityId]?.attacker ?: -1,
-                    Double.NaN, Double.NaN, Double.NaN, 0f,
-                    if (packet.animation == Animation.MAGIC_CRITICAL_EFFECT) "sharpness" else null
-                )
-
-                Animation.EAT_FOOD -> events.add(
-                    nanos, sampled, IndexEventKind.EAT, packet.entityId, -1, Double.NaN, Double.NaN, Double.NaN, 0f,
-                    shadow.entities[packet.entityId]?.equipment?.get(0)?.takeIf { !it.isEmpty }
-                        ?.let { Items.label(it.id) }
-                )
-            }
-
-            is EntityStatus -> if (packet.status == EntityStatus.HURT && packet.entityId != shadow.localPlayer.entityId) hurt(
-                packet.entityId,
-                nanos,
-                Float.NaN
+            is WorldEvent.Critical -> events.add(
+                nanos, sampled, IndexEventKind.CRIT, event.entityId, lastAttacker[event.entityId]?.attacker ?: -1,
+                Double.NaN, Double.NaN, Double.NaN, 0f, if (event.magic) "sharpness" else null
             )
 
-            is UpdateHealth -> {
+            is WorldEvent.Eating -> events.add(
+                nanos, sampled, IndexEventKind.EAT, event.entityId, -1, Double.NaN, Double.NaN, Double.NaN, 0f,
+                world.entities[event.entityId]?.equipment(0)?.label
+            )
+
+            is WorldEvent.Hurt -> hurt(event.entityId, nanos, Float.NaN)
+            is WorldEvent.LocalHealth -> {
                 val previous = lastHealth
-                lastHealth = packet.health
-                if (!previous.isNaN() && packet.health < previous && packet.health > 0f) hurt(
-                    shadow.localPlayer.entityId,
-                    nanos,
-                    previous - packet.health
-                )
+                lastHealth = event.health
+                if (!previous.isNaN() && event.health < previous && event.health > 0f) hurt(local.entityId, nanos, previous - event.health)
             }
 
-            is UseEntity -> if (packet.type == UseEntity.ATTACK) {
-                val attacker = shadow.localPlayer.entityId
-                events.add(
-                    nanos,
-                    sampled,
-                    IndexEventKind.ATTACK,
-                    attacker,
-                    packet.targetId,
-                    Double.NaN,
-                    Double.NaN,
-                    Double.NaN,
-                    0f,
-                    null
-                )
-                remember(Attack(nanos, attacker, packet.targetId))
+            is WorldEvent.Attack -> {
+                events.add(nanos, sampled, IndexEventKind.ATTACK, event.attackerId, event.targetId, Double.NaN, Double.NaN, Double.NaN, 0f, null)
+                remember(Attack(nanos, event.attackerId, event.targetId))
             }
 
-            is CollectItem -> {
-                val item = shadow.entities[packet.collectedId]
-                val stack = item?.metadata?.get(ITEM_STACK_INDEX)?.value as? ItemStack
+            is WorldEvent.ItemCollected -> {
+                val item = world.entities[event.collectedId]
                 events.add(
-                    nanos, sampled, IndexEventKind.PICKUP, packet.collectorId, packet.collectedId,
+                    nanos, sampled, IndexEventKind.PICKUP, event.collectorId, event.collectedId,
                     item?.x ?: Double.NaN, item?.y ?: Double.NaN, item?.z ?: Double.NaN,
-                    (stack?.count ?: 0).toFloat(),
-                    stack?.let { Items.label(it.id) } ?: item?.let { EntityNames.of(it.kind, it.type, it.id) }
+                    (event.stack?.count ?: 0).toFloat(),
+                    event.stack?.label ?: item?.let { names.entityLabel(it.kind, it.type, it.id) }
                 )
             }
 
-            is EntityEffect -> events.add(
-                nanos, sampled, IndexEventKind.EFFECT, packet.entityId, -1, Double.NaN, Double.NaN, Double.NaN,
-                packet.effectId.toFloat(), Items.EFFECTS[packet.effectId] ?: "effect ${packet.effectId}"
+            is WorldEvent.EffectApplied -> events.add(
+                nanos, sampled, IndexEventKind.EFFECT, event.entityId, -1, Double.NaN, Double.NaN, Double.NaN,
+                event.effectId.toFloat(), event.label
             )
 
-            is Explosion -> {
-                val x = packet.x.toDouble()
-                val y = packet.y.toDouble()
-                val z = packet.z.toDouble()
+            is WorldEvent.Explosion -> {
+                val x = event.x
+                val y = event.y
+                val z = event.z
                 var shooter = nearestProjectileShooter(x, y, z)
                 if (shooter < 0) for (end in projectileEnds.asReversed()) {
                     if (nanos - end.nanos > EXPLOSION_MATCH_WINDOW) break
-                    if (distanceSquared(
-                            end.x,
-                            end.y,
-                            end.z,
-                            x,
-                            y,
-                            z
-                        ) <= EXPLOSION_MATCH_RADIUS * EXPLOSION_MATCH_RADIUS
-                    ) {
+                    if (distanceSquared(end.x, end.y, end.z, x, y, z) <= EXPLOSION_MATCH_RADIUS * EXPLOSION_MATCH_RADIUS) {
                         shooter = end.shooter
                         break
                     }
                 }
                 events.add(
-                    nanos, sampled, IndexEventKind.EXPLOSION, -1, shooter, x, y, z, packet.radius,
-                    if (packet.affectedBlocks.isEmpty()) null else "${packet.affectedBlocks.size} blocks"
+                    nanos, sampled, IndexEventKind.EXPLOSION, -1, shooter, x, y, z, event.radius,
+                    if (event.blocks == 0) null else "${event.blocks} blocks"
                 )
-                explosions.addLast(Blast(nanos, shooter, x, y, z, packet.radius.toDouble()))
+                explosions.addLast(Blast(nanos, shooter, x, y, z, event.radius.toDouble()))
                 if (explosions.size > 32) explosions.removeFirst()
             }
 
-            is SoundEffect -> events.add(
-                nanos, sampled, IndexEventKind.SOUND, -1, -1,
-                packet.x / 8.0, packet.y / 8.0, packet.z / 8.0, packet.volume, packet.name
+            is WorldEvent.Sound -> events.add(
+                nanos, sampled, IndexEventKind.SOUND, -1, -1, event.x, event.y, event.z, event.volume, event.name
             )
 
-            is PlayerListItem -> when (packet.action) {
-                PlayerListItem.ADD_PLAYER -> for ((_, name) in packet.entries) events.add(
-                    nanos, sampled, IndexEventKind.JOIN, -1, -1, Double.NaN, Double.NaN, Double.NaN, 0f, name
-                )
+            is WorldEvent.PlayerJoined -> events.add(
+                nanos, sampled, IndexEventKind.JOIN, -1, -1, Double.NaN, Double.NaN, Double.NaN, 0f, event.name
+            )
 
-                PlayerListItem.REMOVE_PLAYER -> for ((uuid) in packet.entries) events.add(
-                    nanos, sampled, IndexEventKind.LEAVE, -1, -1, Double.NaN, Double.NaN, Double.NaN, 0f,
-                    shadow.players.knownProfiles[uuid]?.name
-                )
-            }
+            is WorldEvent.PlayerLeft -> events.add(
+                nanos, sampled, IndexEventKind.LEAVE, -1, -1, Double.NaN, Double.NaN, Double.NaN, 0f, event.name
+            )
 
-            is BlockBreakAnimation -> diggers[packet.position] = Digger(packet.entityId, nanos)
-            is PlayerDigging -> if (packet.status == PlayerDigging.START_DIGGING || packet.status == PlayerDigging.FINISH_DIGGING) {
-                diggers[packet.position] = Digger(shadow.localPlayer.entityId, nanos)
-            }
-
-            is PlayerBlockPlacement -> if (packet.face in 0..5) {
-                val x = PackedPosition.x(packet.position) + FACE_X[packet.face]
-                val y = PackedPosition.y(packet.position) + FACE_Y[packet.face]
-                val z = PackedPosition.z(packet.position) + FACE_Z[packet.face]
-                diggers[PackedPosition.pack(x, y, z)] = Digger(shadow.localPlayer.entityId, nanos)
-            }
-
+            is WorldEvent.Digging -> diggers[PackedPosition.pack(event.x, event.y, event.z)] = Digger(event.entityId, nanos)
+            is WorldEvent.Placing -> diggers[PackedPosition.pack(event.x, event.y, event.z)] = Digger(event.entityId, nanos)
             else -> Unit
         }
+        deriver.onEvent(event)
     }
 
     private fun semantic(event: SemanticEvent) {
         val nanos = event.nanos
         when (event) {
-            is SemanticEvent.EntityDeath -> if (event.entityId != shadow.localPlayer.entityId) death(
+            is SemanticEvent.EntityDeath -> if (event.entityId != world.localPlayer.entityId) death(
                 event.entityId,
                 nanos
             )
@@ -403,7 +297,7 @@ class IndexBuilder(
             is SemanticEvent.OwnDeath -> {
                 if (recorderDeathNanos != Long.MIN_VALUE && nanos - recorderDeathNanos < Nanos.PER_SECOND) return
                 recorderDeathNanos = nanos
-                death(shadow.localPlayer.entityId, nanos, event.messageJson?.let { ChatText.plain(it) })
+                death(world.localPlayer.entityId, nanos, event.messageJson?.let { ChatText.plain(it) })
             }
 
             is SemanticEvent.TitleShown -> (event.titleJson ?: event.subtitleJson)?.let { ChatText.plain(it) }
@@ -438,12 +332,12 @@ class IndexBuilder(
             )
 
             is SemanticEvent.AchievementGet -> events.add(
-                nanos, sampled, IndexEventKind.ACHIEVEMENT, shadow.localPlayer.entityId, -1,
+                nanos, sampled, IndexEventKind.ACHIEVEMENT, world.localPlayer.entityId, -1,
                 Double.NaN, Double.NaN, Double.NaN, 0f, ChatText.plain(event.json)
             )
 
             is SemanticEvent.Respawned -> events.add(
-                nanos, sampled, IndexEventKind.RESPAWN, shadow.localPlayer.entityId, -1,
+                nanos, sampled, IndexEventKind.RESPAWN, world.localPlayer.entityId, -1,
                 Double.NaN, Double.NaN, Double.NaN, event.dimension.toFloat(), dimensionName(event.dimension)
             )
 
@@ -497,26 +391,20 @@ class IndexBuilder(
     }
 
     private fun spawned(id: Int, shooter: Int) {
-        val entity = shadow.entities[id] ?: return
+        val entity = world.entities[id] ?: return
         open.remove(id)?.close(sampled - 1)?.let { closed += it }
-        val profile = entity.uuid?.let { shadow.players.profile(it) }
+        val profile = entity.uuid?.let { world.players.profile(it) }
         open.put(
             id,
-            TrackBuilder(id, entity.kind, entity.type, entity.uuid, profile?.name, false, shooter, sampled)
+            TrackBuilder(names, id, entity.kind, entity.type, entity.uuid, profile?.name, false, shooter, sampled)
         )
         profile?.name?.let { idByName[it.lowercase()] = id }
     }
 
-    private fun shooterOf(packet: SpawnObject, entity: ShadowEntity): Int = when (packet.type) {
-        60 -> if (packet.data > 0) packet.data - 1 else nearestPlayer(entity)
-        63, 64, 66, 90 -> if (packet.data > 0) packet.data else nearestPlayer(entity)
-        else -> nearestPlayer(entity)
-    }
-
-    private fun nearestPlayer(entity: ShadowEntity): Int {
+    private fun nearestPlayer(entity: EntityState): Int {
         var best = -1
         var bestDistance = 2.5 * 2.5
-        val local = shadow.localPlayer
+        val local = world.localPlayer
         if (local.hasPosition) {
             val d = distanceSquared(local.x, local.y + EYE_HEIGHT, local.z, entity.x, entity.y, entity.z)
             if (d < bestDistance) {
@@ -524,7 +412,7 @@ class IndexBuilder(
                 best = local.entityId
             }
         }
-        for (other in shadow.entities.values()) {
+        for (other in world.entities.values()) {
             if (!other.isPlayer || other.dead) continue
             val d = distanceSquared(other.x, other.y + EYE_HEIGHT, other.z, entity.x, entity.y, entity.z)
             if (d < bestDistance) {
@@ -539,8 +427,8 @@ class IndexBuilder(
         var best = -1
         var bestDistance = EXPLOSION_MATCH_RADIUS * EXPLOSION_MATCH_RADIUS
         open.forEach { id, track ->
-            if (track.kind != EntityKind.OBJECT || track.type !in EntityNames.PROJECTILES) return@forEach
-            val entity = shadow.entities[id] ?: return@forEach
+            if (!names.isProjectile(track.kind, track.type)) return@forEach
+            val entity = world.entities[id] ?: return@forEach
             val d = distanceSquared(entity.x, entity.y, entity.z, x, y, z)
             if (d < bestDistance) {
                 bestDistance = d
@@ -597,8 +485,8 @@ class IndexBuilder(
             }
             var best = -1
             var bestScore = 0.0
-            val local = shadow.localPlayer
-            for (other in shadow.entities.values()) {
+            val local = world.localPlayer
+            for (other in world.entities.values()) {
                 if (!other.isPlayer || other.id == victim || other.dead) continue
                 val swing = lastSwing[other.id] ?: continue
                 if (nanos - swing > SWING_WINDOW) continue
@@ -643,7 +531,7 @@ class IndexBuilder(
             if (attack != null && nanos - attack.nanos <= KILL_WINDOW && attack.attacker != victim) attack.attacker else -1
         val position = positionOf(victim)
         val victimTrack = open[victim] ?: localTrack?.takeIf { it.entityId == victim }
-        val victimName = victimTrack?.name ?: victimTrack?.let { EntityNames.of(it.kind, it.type, victim) }
+        val victimName = victimTrack?.name ?: victimTrack?.let { names.entityLabel(it.kind, it.type, victim) }
         events.add(
             nanos, sampled, IndexEventKind.DEATH, victim, killer,
             position?.get(0) ?: Double.NaN, position?.get(1) ?: Double.NaN, position?.get(2) ?: Double.NaN,
@@ -665,26 +553,8 @@ class IndexBuilder(
         lastAttacker.put(attack.victim, attack)
     }
 
-    private fun useFlag(packet: EntityMetadata, nanos: Long) {
-        val entry = packet.metadata.firstOrNull { it.index == 0 && it.type == MetadataEntry.BYTE } ?: return
-        val entity = shadow.entities[packet.entityId]
-        val isLocal = packet.entityId == shadow.localPlayer.entityId
-        if (entity == null && !isLocal) return
-        if (entity != null && !entity.isPlayer) return
-        val previous = if (isLocal) shadow.localPlayer.flagsByte() else entity!!.metadataByte(0)
-        val now = entry.byteValue()
-        val was = previous and EntityTrack.FLAG_USING != 0
-        val using = now and EntityTrack.FLAG_USING != 0
-        if (was == using) return
-        val held = if (isLocal) shadow.localPlayer.heldItem else entity!!.equipment[0]
-        events.add(
-            nanos, sampled, if (using) IndexEventKind.USE_START else IndexEventKind.USE_END, packet.entityId, -1,
-            Double.NaN, Double.NaN, Double.NaN, 0f, held?.takeIf { !it.isEmpty }?.let { Items.label(it.id) }
-        )
-    }
-
     private fun blockChange(nanos: Long, x: Int, y: Int, z: Int, state: Int, by: Int) {
-        val from = shadow.world.blockState(x, y, z)
+        val from = world.blockState(x, y, z)
         if (from == state) return
         val packed = PackedPosition.pack(x, y, z)
         var actor = by
@@ -696,9 +566,9 @@ class IndexBuilder(
     }
 
     private fun positionOf(id: Int): DoubleArray? {
-        val local = shadow.localPlayer
+        val local = world.localPlayer
         if (id == local.entityId) return if (local.hasPosition) doubleArrayOf(local.x, local.y, local.z) else null
-        val entity = shadow.entities[id] ?: return null
+        val entity = world.entities[id] ?: return null
         return doubleArrayOf(entity.x, entity.y, entity.z)
     }
 
@@ -732,6 +602,7 @@ class IndexBuilder(
     private class Digger(val entityId: Int, val nanos: Long)
 
     private class TrackBuilder(
+        val names: GameNames,
         val entityId: Int,
         val kind: EntityKind,
         val type: Int,
@@ -753,12 +624,10 @@ class IndexBuilder(
         private val flags = ByteColumn()
         private val vehicle = IntColumn()
 
-        fun sampleFrom(shadow: ShadowClient): Boolean {
-            val entity = shadow.entities[entityId] ?: return false
-            if (name == null && entity.uuid != null) name = shadow.players.profile(entity.uuid!!)?.name
-            val healthEntry = entity.metadata[HEALTH_INDEX]
-            val healthValue =
-                if (healthEntry != null && healthEntry.type == MetadataEntry.FLOAT) healthEntry.value as Float else Float.NaN
+        fun sampleFrom(world: WorldState): Boolean {
+            val entity = world.entities[entityId] ?: return false
+            if (name == null && entity.uuid != null) name = world.players.profile(entity.uuid!!)?.name
+            val healthValue = entity.health
             push(
                 entity.x,
                 entity.y,
@@ -767,12 +636,12 @@ class IndexBuilder(
                 entity.pitchDegrees,
                 entity.headYawDegrees,
                 healthValue,
-                entity.equipment[0]?.id ?: -1,
-                entity.equipment[1]?.id ?: -1,
-                entity.equipment[2]?.id ?: -1,
-                entity.equipment[3]?.id ?: -1,
-                entity.equipment[4]?.id ?: -1,
-                (entity.metadataByte(0) and 0x3F) or (if (entity.onGround) EntityTrack.FLAG_ON_GROUND else 0),
+                entity.equipment(0)?.id ?: -1,
+                entity.equipment(1)?.id ?: -1,
+                entity.equipment(2)?.id ?: -1,
+                entity.equipment(3)?.id ?: -1,
+                entity.equipment(4)?.id ?: -1,
+                (entity.flags and 0x3F) or (if (entity.onGround) EntityTrack.FLAG_ON_GROUND else 0),
                 entity.vehicleId
             )
             return true
@@ -804,7 +673,7 @@ class IndexBuilder(
             val last = minOf(lastTick, firstTick + length - 1)
             if (last < firstTick) return null
             return EntityTrack(
-                entityId, kind, type, uuid, name, isRecorder, shooterId, firstTick, last,
+                names, entityId, kind, type, uuid, name, isRecorder, shooterId, firstTick, last,
                 x.toArray(), y.toArray(), z.toArray(), yaw.toArray(), pitch.toArray(), headYaw.toArray(),
                 health.toArray(), held.toArray(), Array(4) { armor[it].toArray() }, flags.toArray(), vehicle.toArray()
             )
@@ -879,8 +748,6 @@ class IndexBuilder(
     }
 
     private companion object {
-        const val HEALTH_INDEX = 6
-        const val ITEM_STACK_INDEX = 10
         const val EYE_HEIGHT = 1.62
         const val REACH = 6.5
         const val FACING_MIN = 0.55
@@ -921,8 +788,5 @@ class IndexBuilder(
             "cactus",
             "ground",
         )
-        val FACE_X = intArrayOf(0, 0, 0, 0, -1, 1)
-        val FACE_Y = intArrayOf(-1, 1, 0, 0, 0, 0)
-        val FACE_Z = intArrayOf(0, 0, -1, 1, 0, 0)
     }
 }

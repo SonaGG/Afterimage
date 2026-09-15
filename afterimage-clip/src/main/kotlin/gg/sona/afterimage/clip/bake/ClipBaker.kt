@@ -5,8 +5,7 @@ import gg.sona.afterimage.format.AfterimageWriter
 import gg.sona.afterimage.format.RecordingHeader
 import gg.sona.afterimage.format.WriterOptions
 import gg.sona.afterimage.net.CapturedPacket
-import gg.sona.afterimage.protocol.PacketCodec
-import gg.sona.afterimage.protocol.SessionMark
+import gg.sona.afterimage.replay.protocol.SessionMarks
 import gg.sona.afterimage.replay.consumer.DeliveryMode
 import gg.sona.afterimage.replay.consumer.ReplayConsumer
 import gg.sona.afterimage.replay.session.ReplaySession
@@ -42,7 +41,7 @@ class ClipBaker(private val writerOptions: WriterOptions = WriterOptions()) {
         var packets = 0L
         var keyframes = 0
         AfterimageWriter(output, header, writerOptions).use { writer ->
-            writer.writeSnapshot(0L, session.shadow.snapshot(start))
+            writer.writeSnapshot(0L, session.state.snapshot(start))
             keyframes++
             var lastKeyframe = 0L
             val recorder = object : ReplayConsumer {
@@ -52,7 +51,7 @@ class ClipBaker(private val writerOptions: WriterOptions = WriterOptions()) {
                     writer.append(packet.withTimestamp(relative))
                     packets++
                     if (relative - lastKeyframe >= interval) {
-                        writer.writeSnapshot(relative, session.shadow.snapshot(packet.timestampNanos))
+                        writer.writeSnapshot(relative, session.state.snapshot(packet.timestampNanos))
                         lastKeyframe = relative
                         keyframes++
                     }
@@ -63,7 +62,7 @@ class ClipBaker(private val writerOptions: WriterOptions = WriterOptions()) {
             session.seek(end, linear = true)
             session.removeConsumer(recorder)
             if (end - start > lastKeyframe) {
-                writer.append(PacketCodec.encode(SessionMark(SessionMark.RECORDING_STOPPED, clip.title), end - start))
+                writer.append(session.protocol.marker(SessionMarks.RECORDING_STOPPED, clip.title, end - start))
             }
         }
         progress(1.0)

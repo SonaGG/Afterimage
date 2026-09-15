@@ -13,12 +13,12 @@ class ScoreboardPanel(private val context: EditorContext) : DialogPanel("Scorebo
             Widgets.emptyState("No replay open", "Server scoreboards and the tab list show up here", Icon.INFO)
             return
         }
-        val scoreboard = replay.shadow.scoreboard
+        val scoreboard = replay.world.scoreboard
         val sidebarWidth = EditorFonts.px(250f)
         val height = ImGui.getContentRegionAvailY()
         if (ImGui.beginChild("##sidebar-objective", sidebarWidth, height, false, ImGuiWindowFlags.None)) {
             Widgets.header("Sidebar")
-            val sidebar = scoreboard.displaySlots.getOrNull(SIDEBAR)?.let { scoreboard.objectives[it] }
+            val sidebar = scoreboard.sidebar()
             if (sidebar == null) {
                 Widgets.smallText("No sidebar objective is displayed right now.", EditorTheme.TEXT_DIM.u32)
             } else {
@@ -32,7 +32,7 @@ class ScoreboardPanel(private val context: EditorContext) : DialogPanel("Scorebo
                 EditorFonts.with(EditorFonts.bodyMedium) { ImGui.textUnformatted(strip(sidebar.displayName)) }
                 val rows = sidebar.scores.entries.sortedByDescending { it.value }.take(15)
                 for ((name, score) in rows) {
-                    val team = scoreboard.teams.values.firstOrNull { name in it.members }
+                    val team = scoreboard.teamOf(name)
                     ImGui.textUnformatted(strip((team?.prefix ?: "") + name + (team?.suffix ?: "")))
                     ImGui.sameLine(width - EditorFonts.px(40f))
                     ImGui.pushStyleColor(imgui.flag.ImGuiCol.Text, EditorTheme.RECORD.u32)
@@ -44,10 +44,10 @@ class ScoreboardPanel(private val context: EditorContext) : DialogPanel("Scorebo
                 ImGui.endGroup()
                 list.addRectFilled(x, y, x + width, ImGui.getItemRectMaxY(), EditorTheme.GROUP.u32, EditorFonts.px(8f))
             }
-            if (scoreboard.teams.isNotEmpty()) {
+            if (scoreboard.allTeams.isNotEmpty()) {
                 ImGui.dummy(0f, EditorFonts.px(4f))
                 Widgets.smallText(
-                    "${scoreboard.teams.size} teams    ${scoreboard.objectives.size} objectives",
+                    "${scoreboard.allTeams.size} teams    ${scoreboard.allObjectives.size} objectives",
                     EditorTheme.TEXT_DIM.u32
                 )
             }
@@ -56,8 +56,8 @@ class ScoreboardPanel(private val context: EditorContext) : DialogPanel("Scorebo
         ImGui.sameLine(0f, EditorFonts.px(20f))
         if (ImGui.beginChild("##players", 0f, height, false, ImGuiWindowFlags.None)) {
             Widgets.header("Players")
-            val players = replay.shadow.players.entries.values.sortedBy { it.name.lowercase() }
-            val tabObjective = scoreboard.displaySlots.getOrNull(TAB_LIST)?.let { scoreboard.objectives[it] }
+            val players = replay.world.players.listed.sortedBy { it.name.lowercase() }
+            val tabObjective = scoreboard.tabList()
             if (ImGui.beginTable(
                     "tab",
                     4,
@@ -75,7 +75,7 @@ class ScoreboardPanel(private val context: EditorContext) : DialogPanel("Scorebo
                 for (entry in players) {
                     ImGui.tableNextRow()
                     ImGui.tableNextColumn()
-                    val team = scoreboard.teams.values.firstOrNull { entry.name in it.members }
+                    val team = scoreboard.teamOf(entry.name)
                     ImGui.textUnformatted(strip((team?.prefix ?: "") + entry.name + (team?.suffix ?: "")))
                     ImGui.tableNextColumn()
                     Widgets.mutedText(GAME_MODES.getOrElse(entry.gameMode) { "?" })
@@ -93,8 +93,6 @@ class ScoreboardPanel(private val context: EditorContext) : DialogPanel("Scorebo
     private fun strip(text: String): String = text.replace(Regex("§."), "")
 
     private companion object {
-        const val SIDEBAR = 1
-        const val TAB_LIST = 0
         val GAME_MODES = listOf("survival", "creative", "adventure", "spectator")
     }
 }

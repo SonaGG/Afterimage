@@ -1,10 +1,12 @@
 package gg.sona.afterimage.index
 
-import gg.sona.afterimage.replay.state.shadow.EntityKind
+import gg.sona.afterimage.world.EntityKind
+import gg.sona.afterimage.world.GameNames
 import java.util.*
 import kotlin.math.sqrt
 
 class EntityTrack(
+    val names: GameNames,
     val entityId: Int,
     val kind: EntityKind,
     val type: Int,
@@ -30,7 +32,7 @@ class EntityTrack(
 
     val length: Int get() = lastTick - firstTick + 1
 
-    val label: String get() = name ?: EntityNames.of(kind, type, entityId)
+    val label: String get() = name ?: names.entityLabel(kind, type, entityId)
 
     fun covers(tick: Int): Boolean = tick in firstTick..lastTick
 

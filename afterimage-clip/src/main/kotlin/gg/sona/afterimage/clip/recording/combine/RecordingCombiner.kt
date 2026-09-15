@@ -5,8 +5,7 @@ import gg.sona.afterimage.format.AfterimageWriter
 import gg.sona.afterimage.format.RecordingHeader
 import gg.sona.afterimage.format.WriterOptions
 import gg.sona.afterimage.net.CapturedPacket
-import gg.sona.afterimage.protocol.PacketCodec
-import gg.sona.afterimage.protocol.SessionMark
+import gg.sona.afterimage.replay.protocol.SessionMarks
 import gg.sona.afterimage.replay.consumer.DeliveryMode
 import gg.sona.afterimage.replay.consumer.ReplayConsumer
 import gg.sona.afterimage.replay.session.ReplaySession
@@ -51,15 +50,10 @@ class RecordingCombiner(
                     val end = (range?.last ?: source.endNanos).coerceIn(start, source.endNanos)
                     session.seek(start)
                     val interval = source.header.keyframeIntervalNanos
-                    writer.writeSnapshot(offset, session.shadow.snapshot(start))
+                    writer.writeSnapshot(offset, session.state.snapshot(start))
                     keyframes++
                     writer.append(
-                        PacketCodec.encode(
-                            SessionMark(
-                                SessionMark.USER_MARKER,
-                                path.fileName.toString().substringBeforeLast('.')
-                            ), offset
-                        )
+                        session.protocol.marker(SessionMarks.USER_MARKER, path.fileName.toString().substringBeforeLast('.'), offset)
                     )
                     var lastKeyframe = offset
                     val base = offset
@@ -70,7 +64,7 @@ class RecordingCombiner(
                             writer.append(packet.withTimestamp(relative))
                             packets++
                             if (relative - lastKeyframe >= interval) {
-                                writer.writeSnapshot(relative, session.shadow.snapshot(packet.timestampNanos))
+                                writer.writeSnapshot(relative, session.state.snapshot(packet.timestampNanos))
                                 lastKeyframe = relative
                                 keyframes++
                             }
@@ -89,12 +83,7 @@ class RecordingCombiner(
                     offset = base + (end - start)
                     lengths += end - start
                     writer.append(
-                        PacketCodec.encode(
-                            SessionMark(
-                                SessionMark.RECORDING_STOPPED,
-                                path.fileName.toString()
-                            ), offset
-                        )
+                        session.protocol.marker(SessionMarks.RECORDING_STOPPED, path.fileName.toString(), offset)
                     )
                     offset += gapNanos
                 }

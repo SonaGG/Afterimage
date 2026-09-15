@@ -6,7 +6,7 @@ import gg.sona.afterimage.core.time.Nanos
 import gg.sona.afterimage.editor.*
 import gg.sona.afterimage.editor.commands.*
 import gg.sona.afterimage.editor.host.CameraControl
-import gg.sona.afterimage.replay.state.shadow.EntityKind
+import gg.sona.afterimage.world.EntityKind
 import imgui.ImGui
 import imgui.flag.ImGuiInputTextFlags
 import imgui.type.ImString
@@ -93,7 +93,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
     }
 
     private fun aimPicker(session: EditorSession) {
-        val shadow = context.replay?.shadow
+        val shadow = context.replay?.world
         val recorderName = shadow?.localPlayer?.name ?: "Recorder"
         val current = session.project.aimTargetId
         val label = when (current) {
@@ -122,7 +122,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
     }
 
     private fun targetPicker(settings: CameraSettings, control: CameraControl) {
-        val shadow = context.replay?.shadow
+        val shadow = context.replay?.world
         val recorderName = shadow?.localPlayer?.name ?: "Recorder"
         val label = if (settings.targetsRecorder()) recorderName else entityLabel(settings.targetEntityId)
         if (Widgets.popupButton("target", label)) {
@@ -188,7 +188,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
         }
         if (Widgets.ghostButton("Snap to recorder")) {
             context.replay?.let { replay ->
-                val recorder = replay.shadow.localPlayer
+                val recorder = replay.world.localPlayer
                 control.teleport(
                     CameraPose(
                         Vector3d(recorder.x, recorder.y + settings.eyeHeight, recorder.z),
@@ -541,7 +541,7 @@ class CameraPanel(private val context: EditorContext) : AbstractPanel("Camera", 
     }
 
     private fun entityLabel(id: Int): String {
-        val shadow = context.replay?.shadow ?: return "#$id"
+        val shadow = context.replay?.world ?: return "#$id"
         val entity = shadow.entities[id] ?: return "#$id"
         val name = entity.uuid?.let { shadow.players.profile(it)?.name }
         return name ?: "${entity.kind.name.lowercase().replace('_', ' ')} #$id"

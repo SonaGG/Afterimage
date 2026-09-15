@@ -17,6 +17,7 @@ class AfterimageReader private constructor(
 ) : AutoCloseable {
 
     private val compressors = HashMap<Int, SegmentCompressor>()
+    private val chunkFormat = ChunkPacketFormat.forProtocol(header.protocolVersion)
     private val blobSegments: Map<Int, SegmentInfo> =
         allSegments.filter { it.kind == SegmentKind.BLOB }.associateBy { it.index }
     private val blobs: Map<Long, BlobRef> = (blobDirectory ?: scanBlobs()).associateBy { it.hash }
@@ -58,7 +59,7 @@ class AfterimageReader private constructor(
             }
             val ref = ChunkBlobs.decodeRef(record)
             val blob = blob(ref.hash) ?: continue
-            result += ChunkBlobs.materialize(ref, blob, record.timestampNanos)
+            result += chunkFormat.materialize(ref, blob, record.timestampNanos)
         }
         return result
     }

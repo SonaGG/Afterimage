@@ -12,7 +12,7 @@ import gg.sona.afterimage.editor.imgui.SceneMath.axisOffset
 import gg.sona.afterimage.editor.imgui.SceneMath.planePoint
 import gg.sona.afterimage.editor.imgui.SceneMath.pointInPolygon
 import gg.sona.afterimage.editor.imgui.SceneMath.segmentDistance
-import gg.sona.afterimage.replay.state.interpolation.LinearInterpolation
+import gg.sona.afterimage.world.interpolation.LinearInterpolation
 import imgui.ImDrawList
 import imgui.ImGui
 import imgui.flag.*
@@ -650,7 +650,7 @@ class SceneTools(private val context: EditorContext) {
             )?.let { overlayTags += Triple(it[0] - 8f, it[1] - 12f, hovered.name) }
         }
         if (selected != null) {
-            val shadow = replay.shadow
+            val shadow = replay.world
             val local = shadow.localPlayer
             if (selected == local.entityId && local.hasPosition) {
                 entityBox(draw, local.x, local.y, local.z, 0.3, 1.8, EditorTheme.SELECTION.abgr(1f), 2f)

@@ -1,0 +1,16 @@
+accessWidener v2 official
+accessible class net/minecraft/network/protocol/game/ClientboundTrackedWaypointPacket$Operation
+accessible class net/minecraft/client/gui/screens/MenuScreens$ScreenConstructor
+accessible method net/minecraft/client/gui/screens/MenuScreens getConstructor (Lnet/minecraft/world/inventory/MenuType;)Lnet/minecraft/client/gui/screens/MenuScreens$ScreenConstructor;
+accessible class net/minecraft/client/renderer/texture/SpriteContents$AnimatedTexture
+accessible class net/minecraft/client/renderer/texture/SpriteContents$FrameInfo
+accessible field net/minecraft/client/renderer/texture/SpriteContents$AnimatedTexture frames Ljava/util/List;
+accessible class net/minecraft/client/multiplayer/ClientChunkCache$Storage
+accessible field net/minecraft/client/multiplayer/ClientChunkCache storage Lnet/minecraft/client/multiplayer/ClientChunkCache$Storage;
+accessible field net/minecraft/client/multiplayer/ClientChunkCache$Storage viewCenterX I
+accessible field net/minecraft/client/multiplayer/ClientChunkCache$Storage viewCenterZ I
+accessible field net/minecraft/client/multiplayer/ClientChunkCache$Storage chunkRadius I
+accessible field net/minecraft/client/multiplayer/ClientChunkCache$Storage chunks Ljava/util/concurrent/atomic/AtomicReferenceArray;
+accessible class net/minecraft/client/multiplayer/RegistryDataCollector$ContentsCollector
+accessible field net/minecraft/client/multiplayer/RegistryDataCollector contentsCollector Lnet/minecraft/client/multiplayer/RegistryDataCollector$ContentsCollector;
+accessible method net/minecraft/client/multiplayer/RegistryDataCollector loadNewElementsAndTags (Lnet/minecraft/server/packs/resources/ResourceProvider;Lnet/minecraft/client/multiplayer/RegistryDataCollector$ContentsCollector;Z)Lnet/minecraft/core/RegistryAccess;

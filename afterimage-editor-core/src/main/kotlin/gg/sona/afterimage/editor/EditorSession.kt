@@ -10,7 +10,7 @@ import gg.sona.afterimage.core.event.Listeners
 import gg.sona.afterimage.editor.commands.*
 import gg.sona.afterimage.flashback.ClipRequest
 import gg.sona.afterimage.replay.session.ReplaySession
-import gg.sona.afterimage.replay.state.interpolation.LinearInterpolation
+import gg.sona.afterimage.world.interpolation.LinearInterpolation
 import org.joml.Vector3d
 import java.util.*
 
@@ -64,7 +64,7 @@ class EditorSession(val project: EditorProject, val replay: ReplaySession? = nul
     }
 
     fun aimPosition(target: Int, nanos: Long): Vector3d? {
-        val shadow = replay?.shadow ?: return null
+        val shadow = replay?.world ?: return null
         if (target == CameraSettings.TARGET_RECORDER) {
             val local = shadow.localPlayer
             if (!local.hasPosition) return null
