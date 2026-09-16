@@ -16,7 +16,7 @@
   "environment": "client",
   "entrypoints": {
     "client": [
-      "gg.sona.afterimage.loader26.AfterimageMod"
+      "gg.sona.afterimage.loader263.AfterimageMod"
     ]
   },
   "depends": {

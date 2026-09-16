@@ -1,9 +1,9 @@
 {
   "required": true,
-  "package": "gg.sona.afterimage.mc.mixin",
+  "package": "gg.sona.afterimage.mc189.mixin",
   "compatibilityLevel": "JAVA_8",
   "minVersion": "0.8",
-  "plugin": "gg.sona.afterimage.mc.mixin.AfterimageMixinPlugin",
+  "plugin": "gg.sona.afterimage.mc189.mixin.AfterimageMixinPlugin",
   "client": [
     "AnvilScreenAccessor",
     "BookEditScreenAccessor",
