@@ -14,93 +14,104 @@ class VisualsPanel(private val context: EditorContext) : AbstractPanel("Visuals"
     override fun content(frame: FrameContext) {
         val visuals = context.visuals
         val session = context.session
-        if (Widgets.ghostButton("Reset all")) visuals.reset()
-        Widgets.header("Interface")
-        if (Widgets.beginProperties("gui")) {
-            row("Hotbar", visuals.showHotbar) { visuals.showHotbar = it }
-            row("Health, food, armor", visuals.showStatusBars) { visuals.showStatusBars = it }
-            row("Experience bar", visuals.showExperience) { visuals.showExperience = it }
-            row("Chat", visuals.showChat) { visuals.showChat = it }
-            row("Scoreboard", visuals.showScoreboard) { visuals.showScoreboard = it }
-            row("Boss bar", visuals.showBossBar) { visuals.showBossBar = it }
-            row("Action bar", visuals.showActionBar) { visuals.showActionBar = it }
-            row("Titles", visuals.showTitles) { visuals.showTitles = it }
-            row("Vignette", visuals.showVignette) { visuals.showVignette = it }
-            Widgets.endProperties()
-        }
-        Widgets.header("World")
-        if (Widgets.beginProperties("world")) {
-            row("Players", visuals.renderPlayers) { visuals.renderPlayers = it }
-            row("Other entities", visuals.renderEntities) { visuals.renderEntities = it }
-            row("Dropped items", visuals.renderItemsOnGround) { visuals.renderItemsOnGround = it }
-            row("Name tags", visuals.renderNametags) { visuals.renderNametags = it }
-            row("Particles", visuals.renderParticles) { visuals.renderParticles = it }
-            row("Sky", visuals.renderSky) { visuals.renderSky = it }
-            row("Clouds", visuals.renderClouds) { visuals.renderClouds = it }
-            row("Rain and snow", visuals.renderWeather) { visuals.renderWeather = it }
-            row("Entity shadows", visuals.renderShadows) { visuals.renderShadows = it }
-            row("Hitboxes", visuals.renderHitboxes) { visuals.renderHitboxes = it }
-            Widgets.endProperties()
-        }
         val hidden = visuals.hiddenEntities.size
-        if (hidden > 0) {
-            Widgets.smallText("$hidden entities hidden individually")
-            ImGui.sameLine()
-            if (Widgets.smallButton("Unhide all")) visuals.hiddenEntities.clear()
-        }
         val hiddenTypes = visuals.hiddenEntityTypes.size + visuals.hiddenParticleTypes.size
-        if (Widgets.ghostButton(if (hiddenTypes > 0) "Render Filter ($hiddenTypes)" else "Render Filter...")) context.openPanel(
-            "Render Filter"
-        )
-
-        Widgets.header("Overrides")
-        if (Widgets.beginProperties("overrides")) {
-            row("Override time of day", visuals.overrideTime) { visuals.overrideTime = it }
-            if (visuals.overrideTime) {
-                Widgets.property("Time of day")
-                Widgets.slider("##time", visuals.timeOfDay.toFloat(), 0f, 23999f, labelOf = { timeLabel(it.toInt()) })
-                    ?.let { visuals.timeOfDay = it.toLong() }
-                quickKeyframeButton(session, ValueLane.TIME_OF_DAY, visuals.timeOfDay.toDouble())
-                Widgets.property("")
-                Widgets.segmented("time-presets", listOf("Dawn", "Noon", "Dusk", "Midnight"), -1, 0f)
-                    ?.let { visuals.timeOfDay = TIME_PRESETS[it] }
-            }
-            Widgets.property("Weather")
-            Widgets.enumCombo("##weather", visuals.weather) { it.label }?.let { visuals.weather = it }
-            row("Night vision", visuals.nightVision) { visuals.nightVision = it }
-            Widgets.property("Brightness boost")
-            Widgets.slider("##boost", visuals.brightnessBoost, 0f, 1f, "%.2f")?.let { visuals.brightnessBoost = it }
-            row("Override fog distance", visuals.overrideFog) { visuals.overrideFog = it }
-            if (visuals.overrideFog) {
-                Widgets.property("Fog start")
-                Widgets.slider("##fogstart", visuals.fogStart, 0f, 1f, "%.2f")
-                    ?.let { visuals.fogStart = minOf(it, visuals.fogEnd) }
-                Widgets.property("Fog end")
-                Widgets.slider("##fogend", visuals.fogEnd, 0.05f, 2f, "%.2f")
-                    ?.let { visuals.fogEnd = maxOf(it, visuals.fogStart) }
-            }
-            row("Override fog colour", visuals.overrideFogColor) { visuals.overrideFogColor = it }
-            if (visuals.overrideFogColor) {
-                Widgets.property("Fog colour")
-                colorEdit("##fogcolor", visuals.fogColor)?.let { visuals.fogColor = it }
-            }
-            row("Override sky colour", visuals.overrideSkyColor) { visuals.overrideSkyColor = it }
-            if (visuals.overrideSkyColor) {
-                Widgets.property("Sky colour")
-                colorEdit("##skycolor", visuals.skyColor)?.let { visuals.skyColor = it }
-                Widgets.wrappedText("Disable Sky and set a solid colour for chroma keying.", EditorTheme.TEXT_DIM.u32)
-            }
-            Widgets.endProperties()
+        if (Widgets.ghostButton("Render filter")) context.openPanel("Render Filter")
+        Widgets.tooltip("Hide entity and particle types one by one")
+        if (hiddenTypes > 0) {
+            ImGui.sameLine(0f, EditorFonts.px(6f))
+            Widgets.chip("$hiddenTypes", EditorTheme.WARNING.u32, EditorTheme.WARNING.u32(0.16f))
         }
+        ImGui.sameLine()
+        Widgets.rightAlign(Widgets.buttonWidth("Reset all", Widgets.ButtonStyle.GHOST))
+        if (Widgets.ghostButton("Reset all")) visuals.reset()
+        Widgets.tooltip("Show everything again and drop every override")
 
-        Widgets.header("Guides & overlays")
-        if (Widgets.beginProperties("guides")) {
-            row("Center guide", visuals.centerGuide) { visuals.centerGuide = it }
-            row("Rule of thirds", visuals.thirdsGuide) { visuals.thirdsGuide = it }
-            row("Real-time clock overlay", visuals.rtcOverlay) { visuals.rtcOverlay = it }
-            Widgets.endProperties()
+        if (section("Interface", "visuals.gui")) {
+            if (Widgets.beginProperties("gui")) {
+                row("Hotbar", visuals.showHotbar) { visuals.showHotbar = it }
+                row("Health, food, armor", visuals.showStatusBars) { visuals.showStatusBars = it }
+                row("Experience bar", visuals.showExperience) { visuals.showExperience = it }
+                row("Chat", visuals.showChat) { visuals.showChat = it }
+                row("Scoreboard", visuals.showScoreboard) { visuals.showScoreboard = it }
+                row("Boss bar", visuals.showBossBar) { visuals.showBossBar = it }
+                row("Action bar", visuals.showActionBar) { visuals.showActionBar = it }
+                row("Titles", visuals.showTitles) { visuals.showTitles = it }
+                row("Vignette", visuals.showVignette) { visuals.showVignette = it }
+                Widgets.endProperties()
+            }
+        }
+        if (section("World", "visuals.world", trailing = if (hidden > 0) "$hidden hidden" else null)) {
+            if (Widgets.beginProperties("world")) {
+                row("Players", visuals.renderPlayers) { visuals.renderPlayers = it }
+                row("Other entities", visuals.renderEntities) { visuals.renderEntities = it }
+                row("Dropped items", visuals.renderItemsOnGround) { visuals.renderItemsOnGround = it }
+                row("Name tags", visuals.renderNametags) { visuals.renderNametags = it }
+                row("Particles", visuals.renderParticles) { visuals.renderParticles = it }
+                row("Sky", visuals.renderSky) { visuals.renderSky = it }
+                row("Clouds", visuals.renderClouds) { visuals.renderClouds = it }
+                row("Rain and snow", visuals.renderWeather) { visuals.renderWeather = it }
+                row("Entity shadows", visuals.renderShadows) { visuals.renderShadows = it }
+                row("Hitboxes", visuals.renderHitboxes) { visuals.renderHitboxes = it }
+                if (hidden > 0) {
+                    Widgets.property("Hidden entities", "Entities hidden one by one from the Hierarchy or the Inspector")
+                    Widgets.chip("$hidden")
+                    ImGui.sameLine(0f, EditorFonts.px(6f))
+                    if (Widgets.smallButton("Show all")) visuals.hiddenEntities.clear()
+                }
+                Widgets.endProperties()
+            }
+        }
+        if (section("Overrides", "visuals.overrides")) {
+            if (Widgets.beginProperties("overrides")) {
+                row("Time of day", visuals.overrideTime) { visuals.overrideTime = it }
+                if (visuals.overrideTime) {
+                    Widgets.property("Time")
+                    Widgets.slider("##time", visuals.timeOfDay.toFloat(), 0f, 23999f, labelOf = { timeLabel(it.toInt()) })
+                        ?.let { visuals.timeOfDay = it.toLong() }
+                    quickKeyframeButton(session, ValueLane.TIME_OF_DAY, visuals.timeOfDay.toDouble())
+                    Widgets.property("Presets")
+                    Widgets.buttonGroup("time-presets", TIME_PRESET_LABELS)?.let { visuals.timeOfDay = TIME_PRESETS[it] }
+                }
+                Widgets.property("Weather")
+                Widgets.enumCombo("##weather", visuals.weather) { it.label }?.let { visuals.weather = it }
+                row("Night vision", visuals.nightVision) { visuals.nightVision = it }
+                Widgets.property("Brightness boost")
+                Widgets.slider("##boost", visuals.brightnessBoost, 0f, 1f, "%.2f")?.let { visuals.brightnessBoost = it }
+                row("Fog distance", visuals.overrideFog) { visuals.overrideFog = it }
+                if (visuals.overrideFog) {
+                    Widgets.property("Fog start")
+                    Widgets.slider("##fogstart", visuals.fogStart, 0f, 1f, "%.2f")
+                        ?.let { visuals.fogStart = minOf(it, visuals.fogEnd) }
+                    Widgets.property("Fog end")
+                    Widgets.slider("##fogend", visuals.fogEnd, 0.05f, 2f, "%.2f")
+                        ?.let { visuals.fogEnd = maxOf(it, visuals.fogStart) }
+                }
+                row("Fog colour", visuals.overrideFogColor) { visuals.overrideFogColor = it }
+                if (visuals.overrideFogColor) {
+                    Widgets.property("Colour")
+                    colorEdit("##fogcolor", visuals.fogColor)?.let { visuals.fogColor = it }
+                }
+                row("Sky colour", visuals.overrideSkyColor) { visuals.overrideSkyColor = it }
+                if (visuals.overrideSkyColor) {
+                    Widgets.property("Colour", "Disable Sky and set a solid colour for chroma keying")
+                    colorEdit("##skycolor", visuals.skyColor)?.let { visuals.skyColor = it }
+                }
+                Widgets.endProperties()
+            }
+        }
+        if (section("Guides", "visuals.guides")) {
+            if (Widgets.beginProperties("guides")) {
+                row("Center guide", visuals.centerGuide) { visuals.centerGuide = it }
+                row("Rule of thirds", visuals.thirdsGuide) { visuals.thirdsGuide = it }
+                row("Real-time clock", visuals.rtcOverlay) { visuals.rtcOverlay = it }
+                Widgets.endProperties()
+            }
         }
     }
+
+    private fun section(title: String, key: String, trailing: String? = null): Boolean =
+        Widgets.foldout(title, key, context.ui.collapsedSections, true, trailing)
 
     private inline fun row(label: String, value: Boolean, apply: (Boolean) -> Unit) {
         Widgets.property(label)
@@ -141,5 +152,6 @@ class VisualsPanel(private val context: EditorContext) : AbstractPanel("Visuals"
 
     private companion object {
         val TIME_PRESETS = longArrayOf(23000L, 6000L, 12000L, 18000L)
+        val TIME_PRESET_LABELS = listOf("Dawn", "Noon", "Dusk", "Midnight")
     }
 }

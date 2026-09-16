@@ -1,9 +1,11 @@
 package gg.sona.afterimage.index
 
 import gg.sona.afterimage.core.time.Nanos
+import gg.sona.afterimage.world.GameNames
 import java.util.*
 
 class ReplayIndex(
+    val protocolVersion: Int,
     val startNanos: Long,
     val endNanos: Long,
     val tickNanos: Long,
@@ -14,6 +16,8 @@ class ReplayIndex(
     val dimensions: IntArray,
 ) {
     val tickSeconds: Double = tickNanos / Nanos.PER_SECOND.toDouble()
+
+    val names: GameNames = GameNames.forProtocol(protocolVersion)
 
     private val byId: Map<Int, List<EntityTrack>> = tracks.groupBy { it.entityId }
     private val byUuid: Map<UUID, List<EntityTrack>> = tracks.filter { it.uuid != null }.groupBy { it.uuid!! }
@@ -61,7 +65,7 @@ class ReplayIndex(
     fun dimensionAt(tick: Int): Int = if (dimensions.isEmpty()) 0 else dimensions[tick.coerceIn(0, dimensions.size - 1)]
 
     companion object {
-        const val VERSION = 4
+        const val VERSION = 5
 
         fun isUsername(name: String): Boolean =
             name.length in 1..16 && name.all { it.isLetterOrDigit() || it == '_' }

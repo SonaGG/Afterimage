@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    api(project(":afterimage-gfx"))
     api(project(":afterimage-clip"))
     api(project(":afterimage-flashback"))
     api(project(":afterimage-index"))

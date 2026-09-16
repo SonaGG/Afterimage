@@ -1,7 +1,8 @@
 package gg.sona.afterimage.index
 
 import com.github.luben.zstd.Zstd
-import gg.sona.afterimage.replay.state.shadow.EntityKind
+import gg.sona.afterimage.world.EntityKind
+import gg.sona.afterimage.world.GameNames
 import java.io.*
 import java.nio.file.Files
 import java.nio.file.Path
@@ -51,6 +52,7 @@ object IndexCodec {
     }
 
     private fun writeBody(out: DataOutputStream, index: ReplayIndex) {
+        out.writeInt(index.protocolVersion)
         out.writeLong(index.startNanos)
         out.writeLong(index.endNanos)
         out.writeLong(index.tickNanos)
@@ -104,6 +106,8 @@ object IndexCodec {
     }
 
     private fun readBody(input: DataInputStream): ReplayIndex {
+        val protocolVersion = input.readInt()
+        val names = GameNames.forProtocol(protocolVersion)
         val startNanos = input.readLong()
         val endNanos = input.readLong()
         val tickNanos = input.readLong()
@@ -114,6 +118,7 @@ object IndexCodec {
         val kinds = EntityKind.entries.toTypedArray()
         repeat(trackCount) {
             tracks += EntityTrack(
+                names,
                 input.readInt(),
                 kinds[input.readUnsignedByte()],
                 input.readInt(),
@@ -146,7 +151,7 @@ object IndexCodec {
         val blocks = BlockChangeTable(
             longs(input), ints(input), ints(input), ints(input), ints(input), ints(input), ints(input), ints(input)
         )
-        return ReplayIndex(startNanos, endNanos, tickNanos, tickCount, tracks, events, blocks, dimensions)
+        return ReplayIndex(protocolVersion, startNanos, endNanos, tickNanos, tickCount, tracks, events, blocks, dimensions)
     }
 
     private fun string(out: DataOutputStream, value: String?) {

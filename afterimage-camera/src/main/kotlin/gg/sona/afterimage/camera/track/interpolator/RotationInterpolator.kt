@@ -46,6 +46,12 @@ object RotationInterpolator : ValueInterpolator<Rotation> {
             AngleInterpolator.tangentControl(previous.roll, current.roll, next.roll, scale),
         )
 
+    override fun catmullRom(p0: Rotation, p1: Rotation, p2: Rotation, p3: Rotation, weights: DoubleArray, t: Double): Rotation = Rotation(
+        AngleInterpolator.catmullRom(p0.yaw, p1.yaw, p2.yaw, p3.yaw, weights, t),
+        DoubleInterpolator.catmullRom(p0.pitch, p1.pitch, p2.pitch, p3.pitch, weights, t),
+        AngleInterpolator.catmullRom(p0.roll, p1.roll, p2.roll, p3.roll, weights, t),
+    )
+
     override fun translate(value: Rotation, from: Rotation, to: Rotation): Rotation = Rotation(
         AngleInterpolator.translate(value.yaw, from.yaw, to.yaw),
         value.pitch + (to.pitch - from.pitch),

@@ -1,24 +1,26 @@
 package gg.sona.afterimage.editor.host
 
-class GizmoBatch {
-    var linePositions = DoubleArray(6 * 256)
+import gg.sona.afterimage.gfx.GizmoGeometry
+
+class GizmoBatch : GizmoGeometry {
+    override var linePositions = DoubleArray(6 * 256)
         private set
-    var lineColors = IntArray(256)
+    override var lineColors = IntArray(256)
         private set
-    var lineWidths = FloatArray(256)
+    override var lineWidths = FloatArray(256)
         private set
-    var lineLayers = ByteArray(256)
+    override var lineLayers = ByteArray(256)
         private set
-    var lineCount = 0
+    override var lineCount = 0
         private set
 
-    var triPositions = DoubleArray(9 * 256)
+    override var triPositions = DoubleArray(9 * 256)
         private set
-    var triColors = IntArray(256)
+    override var triColors = IntArray(256)
         private set
-    var triLayers = ByteArray(256)
+    override var triLayers = ByteArray(256)
         private set
-    var triCount = 0
+    override var triCount = 0
         private set
 
     val isEmpty: Boolean get() = lineCount == 0 && triCount == 0

@@ -2,7 +2,7 @@ package gg.sona.afterimage.index
 
 import gg.sona.afterimage.core.log.AfterimageLog
 import gg.sona.afterimage.replay.source.ReplaySource
-import gg.sona.afterimage.replay.state.shadow.RecorderIdentity
+import gg.sona.afterimage.world.RecorderIdentity
 import java.nio.file.Path
 
 class IndexStore {

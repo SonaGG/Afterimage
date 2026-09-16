@@ -97,7 +97,7 @@ object EditorTheme {
         style.grabMinSize = 10f
         style.windowBorderSize = 0f
         style.childBorderSize = 0f
-        style.frameBorderSize = 0f
+        style.frameBorderSize = 1f
         style.popupBorderSize = 1f
         style.tabBorderSize = 0f
         style.windowRounding = 0f

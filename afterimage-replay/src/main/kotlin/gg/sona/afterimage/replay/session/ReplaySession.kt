@@ -8,16 +8,16 @@ import gg.sona.afterimage.format.RecordingHeader
 import gg.sona.afterimage.format.SegmentInfo
 import gg.sona.afterimage.format.SegmentKind
 import gg.sona.afterimage.net.CapturedPacket
-import gg.sona.afterimage.net.PacketDirection
-import gg.sona.afterimage.protocol.*
+import gg.sona.afterimage.replay.protocol.ReplayProtocol
+import gg.sona.afterimage.replay.protocol.ReplayProtocols
+import gg.sona.afterimage.replay.protocol.ReplayState
 import gg.sona.afterimage.replay.consumer.DeliveryMode
 import gg.sona.afterimage.replay.consumer.ReplayConsumer
 import gg.sona.afterimage.replay.consumer.ResetReason
 import gg.sona.afterimage.replay.source.ReplaySource
-import gg.sona.afterimage.replay.state.camera.CameraSample
-import gg.sona.afterimage.replay.state.diff.StateDiff
-import gg.sona.afterimage.replay.state.shadow.RecorderIdentity
-import gg.sona.afterimage.replay.state.shadow.ShadowClient
+import gg.sona.afterimage.world.GameNames
+import gg.sona.afterimage.world.RecorderIdentity
+import gg.sona.afterimage.world.WorldState
 import java.util.*
 import kotlin.math.abs
 
@@ -25,13 +25,16 @@ class ReplaySession(
     val source: ReplaySource,
     consumers: List<ReplayConsumer> = emptyList(),
     private val options: ReplayOptions = ReplayOptions(),
-    val shadow: ShadowClient = ShadowClient(identityOf(source)),
+    val protocol: ReplayProtocol = ReplayProtocols.forVersion(source.header.protocolVersion),
+    val state: ReplayState = protocol.createState(identityOf(source)),
     private val diffSeeks: Boolean = true,
 ) : AutoCloseable {
 
     private val logger = AfterimageLog.logger("afterimage.replay")
+    val world: WorldState get() = state.world
+    val names: GameNames = GameNames.forProtocol(source.header.protocolVersion)
     private val consumers = ArrayList<ReplayConsumer>().apply {
-        add(shadow)
+        add(state)
         addAll(consumers)
     }
     private val jumpThreshold =
@@ -108,11 +111,12 @@ class ReplaySession(
         if (target == positionNanos) return
         val started = System.nanoTime()
         try {
+            if (!linear && options.settleNanos > 0L && world.joined && settleTo(target)) return
             if (target >= positionNanos && (linear || !shouldJump(target))) {
                 deliverUntil(target, DeliveryMode.SEEK)
                 return
             }
-            if (diffSeeks && shadow.joined && seekByDiff(target)) return
+            if (diffSeeks && world.joined && seekByDiff(target)) return
             rebuildFromKeyframe(target, ResetReason.SEEK)
             deliverUntil(target, DeliveryMode.SEEK)
         } finally {
@@ -120,6 +124,36 @@ class ReplaySession(
             seeks++
         }
     }
+
+    var settling: Boolean = false
+        private set
+
+    private fun settleTo(target: Long): Boolean {
+        val pre = maxOf(target - options.settleNanos, earliestSeekable())
+        if (pre >= target) return false
+        settling = true
+        val started = System.nanoTime()
+        try {
+            if (!(diffSeeks && seekByDiff(pre, notifyListeners = false, freshEntities = true))) {
+                rebuildFromKeyframe(pre, ResetReason.SEEK)
+                deliverUntil(pre, DeliveryMode.SEEK, notifyListeners = false)
+            }
+            lastPrePositionNanos = System.nanoTime() - started
+            val prepared = System.nanoTime()
+            listeners.dispatch { it.onSettleStart(pre) }
+            lastPrepareNanos = System.nanoTime() - prepared
+            deliverUntil(target, DeliveryMode.LIVE, notifyMode = DeliveryMode.SEEK)
+        } finally {
+            settling = false
+        }
+        return true
+    }
+
+    var lastPrePositionNanos: Long = 0L
+        private set
+
+    var lastPrepareNanos: Long = 0L
+        private set
 
     fun advanceTo(targetNanos: Long) {
         load()
@@ -141,28 +175,25 @@ class ReplaySession(
     var lastDiffPackets: Int = 0
         private set
 
-    private fun seekByDiff(target: Long): Boolean {
+    private fun seekByDiff(target: Long, notifyListeners: Boolean = true, freshEntities: Boolean = false): Boolean {
         val scratch = scratchSession()
         synchronized(scratch) {
             scratch.seek(target)
-            if (!StateDiff.canDiff(shadow, scratch.shadow)) return false
-            shadow.localPlayer.cameraFrames.dropAfter(minOf(target, positionNanos))
-            val diff = StateDiff.packets(shadow, scratch.shadow, target)
+            if (!state.canDiff(scratch.state)) return false
+            state.dropFutureCameraFrames(minOf(target, positionNanos))
+            val diff = state.diff(scratch.state, target, freshEntities)
             lastDiffPackets = diff.size
-            for (packet in PacketCodec.encodeAll(diff, target)) deliver(packet, DeliveryMode.SEEK)
+            for (packet in diff) deliver(packet, DeliveryMode.SEEK)
             segmentIndex = scratch.segmentIndex
             packetIndex = scratch.packetIndex
             current = scratch.current
             positionNanos = target
             if (hasTickMarkers()) worldTickNanos = scratch.worldTickNanos else alignWorldTick(target)
-            shadow.localPlayer.cameraFrames.copyFrom(scratch.shadow.localPlayer.cameraFrames)
-            shadow.localPlayer.cameraFrames.dropAfter(target)
-            shadow.localPlayer.history.copyFrom(scratch.shadow.localPlayer.history)
-            shadow.adoptTransients(scratch.shadow)
+            state.adoptFrom(scratch.state, target)
             primeCameraLookahead(target)
         }
         consumers.forEach { it.onSettled(target, DeliveryMode.SEEK) }
-        listeners.dispatch { it.onPositionChanged(target, DeliveryMode.SEEK) }
+        if (notifyListeners) listeners.dispatch { it.onPositionChanged(target, DeliveryMode.SEEK) }
         return true
     }
 
@@ -170,8 +201,9 @@ class ReplaySession(
         scratch ?: ReplaySession(
             source,
             emptyList(),
-            options.copy(loop = false),
-            ShadowClient(shadow.recorderIdentity),
+            options.copy(loop = false, settleNanos = 0L),
+            protocol,
+            state.fork(),
             diffSeeks = false
         ).also { scratch = it }
 
@@ -226,7 +258,7 @@ class ReplaySession(
             val first = source.segments.firstOrNull { it.kind != SegmentKind.SNAPSHOT }
             if (first != null) {
                 val join = source.packets(first.index)
-                    .firstOrNull { it.direction == PacketDirection.CLIENTBOUND && it.packetId == ClientboundPlay.JOIN_GAME }
+                    .firstOrNull { protocol.isJoin(it) }
                 if (join != null) result = maxOf(result, join.timestampNanos)
             }
         }
@@ -272,7 +304,7 @@ class ReplaySession(
         for ((index, _, kind) in source.segments) {
             if (kind == SegmentKind.SNAPSHOT) continue
             val packets = source.packets(index)
-            if (packets.any { it.direction == PacketDirection.SERVERBOUND && it.packetId == AfterimageInternal.LOCAL_TICK }) {
+            if (packets.any { protocol.isTickMarker(it) }) {
                 found = true
                 break
             }
@@ -317,7 +349,7 @@ class ReplaySession(
         }
     }
 
-    private fun deliverUntil(target: Long, mode: DeliveryMode) {
+    private fun deliverUntil(target: Long, mode: DeliveryMode, notifyListeners: Boolean = true, notifyMode: DeliveryMode = mode) {
         val markers = hasTickMarkers()
         while (true) {
             val packets = current ?: loadNextSegment() ?: break
@@ -329,9 +361,7 @@ class ReplaySession(
             if (packet.timestampNanos > target) break
             if (skipDimensionBounce(packets)) continue
             if (markers) {
-                if (packet.direction == PacketDirection.SERVERBOUND && packet.packetId == AfterimageInternal.LOCAL_TICK) fireTick(
-                    packet.timestampNanos
-                )
+                if (protocol.isTickMarker(packet) && packet.timestampNanos > worldTickNanos) fireTick(packet.timestampNanos)
             } else {
                 tickUpTo(packet.timestampNanos)
             }
@@ -341,21 +371,19 @@ class ReplaySession(
         if (!markers) tickUpTo(target)
         positionNanos = target
         primeCameraLookahead(target)
-        consumers.forEach { it.onSettled(target, mode) }
-        listeners.dispatch { it.onPositionChanged(target, mode) }
+        consumers.forEach { it.onSettled(target, notifyMode) }
+        if (notifyListeners) listeners.dispatch { it.onPositionChanged(target, notifyMode) }
     }
 
     private fun skipDimensionBounce(packets: List<CapturedPacket>): Boolean {
         val leaving = packets[packetIndex]
-        if (leaving.direction != PacketDirection.CLIENTBOUND || leaving.packetId != ClientboundPlay.RESPAWN) return false
+        val leavingDimension = protocol.respawnDimension(leaving) ?: return false
         val returning = packets.getOrNull(packetIndex + 1) ?: return false
-        if (returning.direction != PacketDirection.CLIENTBOUND || returning.packetId != ClientboundPlay.RESPAWN) return false
+        val returningDimension = protocol.respawnDimension(returning) ?: return false
         if (returning.timestampNanos - leaving.timestampNanos > DIMENSION_BOUNCE_WINDOW_NANOS) return false
-        val currentDimension = shadow.world.dimension
-        val leavingRespawn = PacketCodec.decode(leaving) as? Respawn ?: return false
-        if (leavingRespawn.dimension == currentDimension) return false
-        val returningRespawn = PacketCodec.decode(returning) as? Respawn ?: return false
-        if (returningRespawn.dimension != currentDimension) return false
+        val currentDimension = world.dimension
+        if (leavingDimension == currentDimension) return false
+        if (returningDimension != currentDimension) return false
         packetIndex += 2
         return true
     }
@@ -379,7 +407,7 @@ class ReplaySession(
         var index = packetIndex
         var segment = segmentIndex
         val limit = target + CAMERA_LOOKAHEAD_NANOS
-        val frames = shadow.localPlayer.cameraFrames
+        val frames = world.localPlayer.cameraFrames
         var scanned = 0
         while (scanned < CAMERA_LOOKAHEAD_PACKETS) {
             if (index >= list.size) {
@@ -396,10 +424,8 @@ class ReplaySession(
             val packet = list[index++]
             scanned++
             if (packet.timestampNanos > limit) return
-            if (packet.direction != PacketDirection.SERVERBOUND) continue
-            if (packet.packetId != AfterimageInternal.CAMERA_FRAME && packet.packetId != AfterimageInternal.CAMERA_FRAME_COMPACT) continue
-            val frame = PacketCodec.decode(packet) as? CameraFrame ?: continue
-            frames.push(CameraSample(packet.timestampNanos, frame.modelView, frame.fov, frame.position, frame.hand))
+            val sample = protocol.cameraSample(packet) ?: continue
+            frames.push(sample)
         }
     }
 

@@ -95,9 +95,11 @@ class CommandPalette {
         ImGui.pushStyleColor(ImGuiCol.FrameBg, 0)
         ImGui.pushStyleColor(ImGuiCol.FrameBgHovered, 0)
         ImGui.pushStyleColor(ImGuiCol.FrameBgActive, 0)
+        ImGui.pushStyleVar(ImGuiStyleVar.FrameBorderSize, 0f)
         EditorFonts.with(EditorFonts.bodyMedium) {
             ImGui.inputTextWithHint("##palette-query", "Type a command", query, ImGuiInputTextFlags.AutoSelectAll)
         }
+        ImGui.popStyleVar()
         ImGui.popStyleColor(3)
         if (ImGui.isKeyPressed(ImGuiKey.DownArrow, true) && matches.isNotEmpty()) selected = (selected + 1) % matches.size
         if (ImGui.isKeyPressed(ImGuiKey.UpArrow, true) && matches.isNotEmpty()) selected = (selected - 1 + matches.size) % matches.size

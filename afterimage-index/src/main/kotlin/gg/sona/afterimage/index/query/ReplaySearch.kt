@@ -1,7 +1,6 @@
 package gg.sona.afterimage.index.query
 
 import gg.sona.afterimage.index.IndexEventKind
-import gg.sona.afterimage.index.Items
 import gg.sona.afterimage.index.ReplayIndex
 import kotlin.math.sqrt
 
@@ -187,7 +186,7 @@ class ReplaySearch(private val index: ReplayIndex) {
             val from = blocks.from[i] shr 4
             val to = blocks.to[i] shr 4
             if (filters.texts.isNotEmpty() && !filters.texts.all {
-                    Items.matches(to, it) || Items.matches(
+                    index.names.itemMatches(to, it) || index.names.itemMatches(
                         from,
                         it
                     )

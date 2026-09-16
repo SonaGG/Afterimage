@@ -158,7 +158,7 @@ class Track<T>(val interpolator: ValueInterpolator<T>, val name: String = "track
                     interpolator.distance(from.value, to.value),
                     interpolator.distance(to.value, p3),
                 )
-                CatmullRom.evaluate(p0, from.value, to.value, p3, weights, t, interpolator::lerp)
+                interpolator.catmullRom(p0, from.value, to.value, p3, weights, t)
             }
 
             SegmentMode.BEZIER -> {

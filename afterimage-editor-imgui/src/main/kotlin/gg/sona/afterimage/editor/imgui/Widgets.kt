@@ -334,20 +334,6 @@ object Widgets {
 
     private val toggleAnim = HashMap<Int, Float>()
 
-    fun section(title: String, defaultOpen: Boolean = true): Boolean {
-        ImGui.pushStyleColor(ImGuiCol.Header, 0)
-        ImGui.pushStyleColor(ImGuiCol.HeaderHovered, EditorTheme.CONTROL.u32)
-        ImGui.pushStyleColor(ImGuiCol.HeaderActive, EditorTheme.CONTROL_HOVER.u32)
-        val open = EditorFonts.with(EditorFonts.bodyMedium) {
-            ImGui.collapsingHeader(
-                title,
-                if (defaultOpen) imgui.flag.ImGuiTreeNodeFlags.DefaultOpen else 0
-            )
-        }
-        ImGui.popStyleColor(3)
-        return open
-    }
-
     fun header(text: String, color: Int = EditorTheme.TEXT.u32) {
         val x = ImGui.getCursorScreenPosX()
         val width = ImGui.getContentRegionAvailX()
@@ -373,47 +359,144 @@ object Widgets {
         trailing: String? = null,
     ): Boolean {
         val open = defaultOpen != (key in toggled)
+        val list = ImGui.getWindowDrawList()
+        val bandX = ImGui.getWindowPosX()
+        val bandWidth = ImGui.getWindowWidth()
         val x = ImGui.getCursorScreenPosX()
         val width = ImGui.getContentRegionAvailX()
-        val list = ImGui.getWindowDrawList()
-        if (ImGui.getCursorPosY() > ImGui.getStyle().windowPaddingY + EditorFonts.px(4f)) {
-            ImGui.dummy(0f, EditorFonts.px(4f))
-            val y = ImGui.getCursorScreenPosY()
-            list.addLine(x, y, x + width, y, EditorTheme.SEPARATOR.u32, 1f)
-            ImGui.dummy(0f, EditorFonts.px(2f))
-        }
+        if (ImGui.getCursorPosY() > ImGui.getStyle().windowPaddingY + EditorFonts.px(4f)) ImGui.dummy(0f, EditorFonts.px(8f))
         val height = EditorFonts.px(26f)
         val y = ImGui.getCursorScreenPosY()
         val pressed = ImGui.invisibleButton("##foldout-$key", maxOf(1f, width), height)
         val hovered = ImGui.isItemHovered()
+        list.addRectFilled(bandX, y, bandX + bandWidth, y + height, EditorTheme.PANEL_RAISED.u32)
         if (hovered) {
-            list.addRectFilled(x, y, x + width, y + height, EditorTheme.TEXT.u32(0.04f), EditorFonts.px(5f))
+            list.addRectFilled(bandX, y, bandX + bandWidth, y + height, EditorTheme.TEXT.u32(0.035f))
             cursorHand()
         }
-        val chevron = EditorFonts.px(11f)
+        list.addLine(bandX, y, bandX + bandWidth, y, EditorTheme.BORDER.u32, 1f)
+        list.addLine(bandX, y + height, bandX + bandWidth, y + height, EditorTheme.BORDER.u32, 1f)
+        val chevron = EditorFonts.px(10f)
         Icons.draw(
             list,
             if (open) Icon.CHEVRON_DOWN else Icon.CHEVRON_RIGHT,
-            x + EditorFonts.px(3f),
+            x + EditorFonts.px(2f),
             y + (height - chevron) / 2f,
             chevron,
             EditorTheme.TEXT_MUTED.u32
         )
-        EditorFonts.with(EditorFonts.smallMedium) {
-            list.addText(x + EditorFonts.px(19f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, title)
+        EditorFonts.with(EditorFonts.bodyMedium) {
+            list.addText(x + EditorFonts.px(18f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT.u32, title)
         }
         if (trailing != null) EditorFonts.with(EditorFonts.small) {
             val trailingWidth = textWidth(trailing)
             list.addText(
-                x + width - trailingWidth - EditorFonts.px(4f),
+                x + width - trailingWidth - EditorFonts.px(2f),
                 y + (height - ImGui.getFontSize()) / 2f,
-                EditorTheme.TEXT_DIM.u32,
+                EditorTheme.TEXT_MUTED.u32,
                 trailing
             )
         }
         if (pressed) toggled.toggle(key, key !in toggled)
-        if (open) ImGui.dummy(0f, EditorFonts.px(2f))
+        ImGui.dummy(0f, EditorFonts.px(if (open) 6f else 2f))
         return open
+    }
+
+    fun sectionLabel(text: String, trailing: String? = null) {
+        val x = ImGui.getCursorScreenPosX()
+        val width = ImGui.getContentRegionAvailX()
+        val list = ImGui.getWindowDrawList()
+        if (ImGui.getCursorPosY() > ImGui.getStyle().windowPaddingY + EditorFonts.px(4f)) ImGui.dummy(0f, EditorFonts.px(10f))
+        val height = EditorFonts.px(18f)
+        val y = ImGui.getCursorScreenPosY()
+        EditorFonts.with(EditorFonts.label) {
+            list.addText(x + EditorFonts.px(2f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT_DIM.u32, text.uppercase())
+        }
+        if (trailing != null) EditorFonts.with(EditorFonts.small) {
+            val trailingWidth = textWidth(trailing)
+            list.addText(x + width - trailingWidth - EditorFonts.px(2f), y + (height - ImGui.getFontSize()) / 2f, EditorTheme.TEXT_DIM.u32, trailing)
+        }
+        ImGui.dummy(0f, height + EditorFonts.px(2f))
+    }
+
+    fun badgeWidth(text: String): Float =
+        EditorFonts.with(EditorFonts.smallMedium) { textWidth(text) } + EditorFonts.px(12f)
+
+    fun drawBadge(
+        list: ImDrawList,
+        text: String,
+        right: Float,
+        centerY: Float,
+        color: Int = EditorTheme.TEXT_MUTED.u32,
+        background: Int = EditorTheme.CONTROL.u32,
+    ): Float = EditorFonts.with(EditorFonts.smallMedium) {
+        val textW = textWidth(text)
+        val width = textW + EditorFonts.px(12f)
+        val height = ImGui.getFontSize() + EditorFonts.px(4f)
+        val x = right - width
+        val y = centerY - height / 2f
+        list.addRectFilled(x, y, right, y + height, background, height / 2f)
+        list.addText(x + EditorFonts.px(6f), y + EditorFonts.px(2f), color, text)
+        width
+    }
+
+    fun buttonGroup(
+        id: String,
+        labels: List<String>,
+        tooltips: List<String>? = null,
+        width: Float = -1f,
+        enabled: Boolean = true,
+    ): Int? {
+        var result: Int? = null
+        val height = ImGui.getFrameHeight()
+        val total = if (width > 0f) width else ImGui.getContentRegionAvailX() + minOf(0f, width)
+        val each = total / labels.size
+        val x = ImGui.getCursorScreenPosX()
+        val y = ImGui.getCursorScreenPosY()
+        val list = ImGui.getWindowDrawList()
+        val rounding = ImGui.getStyle().frameRounding
+        list.addRectFilled(x, y, x + total, y + height, EditorTheme.CONTROL.u32(if (enabled) 1f else 0.5f), rounding)
+        ImGui.pushID(id)
+        if (!enabled) ImGui.beginDisabled()
+        for ((index, label) in labels.withIndex()) {
+            val cx = x + each * index
+            ImGui.setCursorScreenPos(cx, y)
+            val pressed = ImGui.invisibleButton("cell$index", each, height)
+            val hovered = enabled && ImGui.isItemHovered()
+            val held = enabled && ImGui.isItemActive()
+            if (hovered || held) {
+                val flags = when {
+                    labels.size == 1 -> ImDrawFlags.RoundCornersAll
+                    index == 0 -> ImDrawFlags.RoundCornersLeft
+                    index == labels.lastIndex -> ImDrawFlags.RoundCornersRight
+                    else -> ImDrawFlags.RoundCornersNone
+                }
+                list.addRectFilled(
+                    cx,
+                    y,
+                    cx + each,
+                    y + height,
+                    if (held) EditorTheme.CONTROL_ACTIVE.u32 else EditorTheme.CONTROL_HOVER.u32,
+                    rounding,
+                    flags
+                )
+            }
+            if (index > 0) list.addLine(cx, y + height * 0.25f, cx, y + height * 0.75f, EditorTheme.BORDER.u32, 1f)
+            val labelWidth = textWidth(label)
+            list.addText(
+                cx + (each - labelWidth) / 2f,
+                y + (height - ImGui.getFontSize()) / 2f,
+                if (enabled) EditorTheme.TEXT.u32 else EditorTheme.TEXT_DIM.u32,
+                label
+            )
+            if (pressed) result = index
+            tooltips?.getOrNull(index)?.let { if (hovered) hint(it) }
+        }
+        if (!enabled) ImGui.endDisabled()
+        ImGui.popID()
+        ImGui.setCursorScreenPos(x, y)
+        ImGui.dummy(total, height)
+        return result
     }
 
     fun chipButton(
@@ -1250,7 +1333,7 @@ object Widgets {
         val hovered = ImGui.isItemHovered()
         val list = ImGui.getWindowDrawList()
         if (selected) list.addRectFilled(x, y, x + width, y + height, EditorTheme.SELECTION_FILL.u32, EditorFonts.px(5f))
-        else if (hovered) list.addRectFilled(x, y, x + width, y + height, EditorTheme.CONTROL.u32, EditorFonts.px(5f))
+        else if (hovered) list.addRectFilled(x, y, x + width, y + height, EditorTheme.TEXT.u32(0.05f), EditorFonts.px(5f))
         content(x, y, width, hovered)
         return pressed
     }

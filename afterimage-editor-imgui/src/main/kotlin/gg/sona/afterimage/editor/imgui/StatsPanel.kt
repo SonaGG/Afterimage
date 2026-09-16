@@ -43,7 +43,7 @@ class StatsPanel(private val context: EditorContext) : DialogPanel("Stats", Icon
             if (replay == null) {
                 Widgets.smallText("Open a replay to see playback statistics.", EditorTheme.TEXT_DIM.u32)
             } else {
-                val shadow = replay.shadow
+                val shadow = replay.world
                 if (Widgets.beginProperties("replay")) {
                     Widgets.property("Position")
                     Widgets.mutedText("${TimeFormat.clock(replay.positionNanos)} / ${TimeFormat.clock(replay.durationNanos)}")
@@ -56,7 +56,7 @@ class StatsPanel(private val context: EditorContext) : DialogPanel("Stats", Icon
                         )
                     )
                     Widgets.property("Packets")
-                    Widgets.mutedText("${replay.packetsDelivered} delivered    ${shadow.packetsApplied} tracked")
+                    Widgets.mutedText("${replay.packetsDelivered} delivered    ${shadow.trackedPackets} tracked")
                     Widgets.property("Seeks")
                     Widgets.mutedText(
                         "${replay.seeks}    last ${
@@ -67,9 +67,9 @@ class StatsPanel(private val context: EditorContext) : DialogPanel("Stats", Icon
                         } ms    ${replay.lastDiffPackets} diff packets"
                     )
                     Widgets.property("Chunks")
-                    Widgets.mutedText("${shadow.world.chunks.size}")
+                    Widgets.mutedText("${shadow.loadedChunks}")
                     Widgets.property("Entities")
-                    Widgets.mutedText("${shadow.entities.size}    ${shadow.players.entries.size} players listed")
+                    Widgets.mutedText("${shadow.entities.size}    ${shadow.players.listed.size} players listed")
                     Widgets.property("Camera frames")
                     Widgets.mutedText(
                         "${shadow.localPlayer.cameraFrames.size} buffered    ${
@@ -80,7 +80,7 @@ class StatsPanel(private val context: EditorContext) : DialogPanel("Stats", Icon
                         } ms interval"
                     )
                     Widgets.property("Dimension")
-                    Widgets.mutedText("${shadow.world.dimension}")
+                    Widgets.mutedText("${shadow.dimension}")
                     Widgets.endProperties()
                 }
             }

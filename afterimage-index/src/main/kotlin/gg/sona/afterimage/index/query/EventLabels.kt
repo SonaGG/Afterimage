@@ -1,7 +1,6 @@
 package gg.sona.afterimage.index.query
 
 import gg.sona.afterimage.index.IndexEventKind
-import gg.sona.afterimage.index.Items
 import gg.sona.afterimage.index.ReplayIndex
 import kotlin.math.abs
 
@@ -90,9 +89,9 @@ class EventLabels(private val index: ReplayIndex) {
         val actor = blocks.by[i]
         val who = if (actor >= 0) name(actor, blocks.tick[i]) + " " else ""
         return when {
-            to == 0 && from != 0 -> "${who}broke ${Items.label(from)}"
-            from == 0 -> "${who}placed ${Items.label(to)}"
-            else -> "${who}changed ${Items.label(from)} to ${Items.label(to)}"
+            to == 0 && from != 0 -> "${who}broke ${index.names.itemLabel(from)}"
+            from == 0 -> "${who}placed ${index.names.itemLabel(to)}"
+            else -> "${who}changed ${index.names.itemLabel(from)} to ${index.names.itemLabel(to)}"
         }
     }
 

@@ -57,7 +57,7 @@ class TimelineActions(private val context: EditorContext) {
         ValueLane.SPEED -> Math.abs(session.replay?.speed ?: 1.0)
         ValueLane.FOV -> context.host.camera.currentPose().fov
         ValueLane.TIME_OF_DAY -> (context.host.worldTimeOfDay()
-            ?: Math.floorMod(session.replay?.shadow?.world?.timeOfDay ?: 6000L, 24000L)).toDouble()
+            ?: Math.floorMod(session.replay?.world?.timeOfDay ?: 6000L, 24000L)).toDouble()
 
         ValueLane.SHAKE -> context.host.camera.settings.shakeStrength
         ValueLane.FREEZE -> ValueLane.FREEZE.default

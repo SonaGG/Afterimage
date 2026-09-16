@@ -6,7 +6,7 @@ import gg.sona.afterimage.index.ReplayIndex
 import gg.sona.afterimage.index.query.EventLabels
 import gg.sona.afterimage.index.query.ReplaySearch
 import gg.sona.afterimage.replay.source.ReplaySource
-import gg.sona.afterimage.replay.state.shadow.RecorderIdentity
+import gg.sona.afterimage.world.RecorderIdentity
 import java.nio.file.Path
 
 class EventIndex {

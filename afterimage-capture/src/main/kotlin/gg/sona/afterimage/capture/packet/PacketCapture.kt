@@ -165,7 +165,7 @@ class PacketCapture(
         if (ringEmpty && reorderBuffer.isEmpty()) {
             while (true) {
                 val command = commands.poll() ?: break
-                runGuarded("command") { command() }
+                runTask("command") { command() }
                 progressed = true
             }
         }
@@ -190,16 +190,16 @@ class PacketCapture(
     }
 
     private fun process(packet: CapturedPacket) {
-        runGuarded("tracker") { tracker.observe(packet) }
+        runTask("tracker") { tracker.observe(packet) }
         if (!observers.isEmpty) {
-            observers.dispatch { observer -> runGuarded("observer") { observer.onPacket(packet) } }
+            observers.dispatch { observer -> runTask("observer") { observer.onPacket(packet) } }
         }
         record(packet)
     }
 
     private fun record(packet: CapturedPacket) {
         val recording = active ?: return
-        runGuarded("writer") {
+        runTask("writer") {
             val nanos = recording.recordingNanos(packet.timestampNanos)
             recording.writer.append(packet.withTimestamp(nanos))
             recording.recorded++
@@ -248,14 +248,14 @@ class PacketCapture(
             keyframes = recording.keyframes,
             elapsedNanos = clock.nanos() - recording.originNanos,
         )
-        runGuarded("close") { recording.writer.close() }
+        runTask("close") { recording.writer.close() }
         listeners.dispatch { it.onRecordingStopped(recording.writer.path, stats) }
         logger.info("Stopped recording ${recording.writer.path.fileName}: ${stats.packetsRecorded} packets, ${stats.bytesWritten} bytes, ${stats.keyframes} keyframes")
     }
 
     private fun idle() {
         val recording = active ?: return
-        runGuarded("sync") {
+        runTask("sync") {
             recording.writer.flushIfStale(recording.recordingNanos(clock.nanos()))
             recording.writer.sync()
         }
@@ -266,7 +266,7 @@ class PacketCapture(
         endRecording()
     }
 
-    private inline fun runGuarded(stage: String, action: () -> Unit) {
+    private inline fun runTask(stage: String, action: () -> Unit) {
         try {
             action()
         } catch (error: Throwable) {

@@ -5,8 +5,7 @@ import gg.sona.afterimage.format.AfterimageWriter
 import gg.sona.afterimage.format.RecordingHeader
 import gg.sona.afterimage.format.WriterOptions
 import gg.sona.afterimage.net.CapturedPacket
-import gg.sona.afterimage.protocol.PacketCodec
-import gg.sona.afterimage.protocol.SessionMark
+import gg.sona.afterimage.replay.protocol.SessionMarks
 import gg.sona.afterimage.replay.consumer.DeliveryMode
 import gg.sona.afterimage.replay.consumer.ReplayConsumer
 import gg.sona.afterimage.replay.session.ReplaySession
@@ -42,7 +41,7 @@ class RecordingTrimmer(private val writerOptions: WriterOptions = WriterOptions(
                 session.load()
                 session.seek(start)
                 val interval = input.header.keyframeIntervalNanos
-                writer.writeSnapshot(0L, session.shadow.snapshot(start))
+                writer.writeSnapshot(0L, session.state.snapshot(start))
                 keyframes++
                 var lastKeyframe = 0L
                 val consumer = object : ReplayConsumer {
@@ -52,7 +51,7 @@ class RecordingTrimmer(private val writerOptions: WriterOptions = WriterOptions(
                         writer.append(packet.withTimestamp(relative))
                         packets++
                         if (relative - lastKeyframe >= interval) {
-                            writer.writeSnapshot(relative, session.shadow.snapshot(packet.timestampNanos))
+                            writer.writeSnapshot(relative, session.state.snapshot(packet.timestampNanos))
                             lastKeyframe = relative
                             keyframes++
                         }
@@ -68,10 +67,7 @@ class RecordingTrimmer(private val writerOptions: WriterOptions = WriterOptions(
                 session.seek(end, linear = true)
                 session.removeConsumer(consumer)
                 writer.append(
-                    PacketCodec.encode(
-                        SessionMark(SessionMark.RECORDING_STOPPED, source.fileName.toString()),
-                        end - start
-                    )
+                    session.protocol.marker(SessionMarks.RECORDING_STOPPED, source.fileName.toString(), end - start)
                 )
             }
             progress(1.0)

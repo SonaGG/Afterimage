@@ -1,7 +1,9 @@
 [versions]
+lwjgl = "3.4.3"
 fabric-loader = "0.19.3"
 fabric-loom = "1.17-SNAPSHOT"
 minecraft = "1.8.9"
+minecraft26 = "26.3"
 kotlin = "2.4.0"
 lenis = "0.1.4"
 joml = "1.10.8"
@@ -13,7 +15,11 @@ osl = "0.17.1"
 devauth = "1.2.2"
 
 [libraries]
+lwjgl-core = { module = "org.lwjgl:lwjgl", version.ref = "lwjgl" }
+lwjgl-opengl = { module = "org.lwjgl:lwjgl-opengl", version.ref = "lwjgl" }
+lwjgl-sdl = { module = "org.lwjgl:lwjgl-sdl", version.ref = "lwjgl" }
 minecraft = { module = "com.mojang:minecraft", version.ref = "minecraft" }
+minecraft26 = { module = "com.mojang:minecraft", version.ref = "minecraft26" }
 fabric-loader = { module = "net.fabricmc:fabric-loader", version.ref = "fabric-loader" }
 lenis = { module = "pl.tomgirl:lenis", version.ref = "lenis" }
 
@@ -32,5 +38,6 @@ devauth-fabric = { module = "me.djtheredstoner:DevAuth-fabric", version.ref = "d
 
 [plugins]
 fabric-loom = { id = "net.fabricmc.fabric-loom-remap", version.ref = "fabric-loom" }
+fabric-loom-plain = { id = "net.fabricmc.fabric-loom", version.ref = "fabric-loom" }
 ploceus = { id = "ploceus", version.ref = "fabric-loom" }
 kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -8,7 +8,7 @@ import gg.sona.afterimage.editor.commands.SetLaneState
 import gg.sona.afterimage.editor.commands.SetLook
 import gg.sona.afterimage.editor.commands.SetValueKeyframe
 import gg.sona.afterimage.editor.look.LookSettings
-import gg.sona.afterimage.replay.state.shadow.EntityKind
+import gg.sona.afterimage.world.EntityKind
 import imgui.ImGui
 import java.nio.file.Files
 import java.nio.file.Path
@@ -26,28 +26,31 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
             return
         }
         val look = session.project.look
-        if (Widgets.beginProperties("look-top")) {
-            Widgets.property("Preview in viewport", "Show the look on the world while editing; gizmos, the hand and the HUD stay untouched. Exports render it when Apply look is on in the Export panel.")
-            Widgets.toggle("##preview", context.ui.lookPreview)?.let { context.ui.lookPreview = it }
-            Widgets.endProperties()
-        }
+        Widgets.toggle("Preview in viewport##preview", context.ui.lookPreview)?.let { context.ui.lookPreview = it }
+        Widgets.tooltip("Show the look on the world while editing; gizmos, the hand and the HUD stay untouched. Exports render it when Apply look is on in the Export panel.")
         if (look.active) {
             ImGui.sameLine()
-            if (Widgets.ghostButton("Reset look")) session.execute(SetLook("reset", LookSettings()))
+            Widgets.rightAlign(Widgets.buttonWidth("Reset", Widgets.ButtonStyle.GHOST))
+            if (Widgets.ghostButton("Reset")) session.execute(SetLook("reset", LookSettings()))
+            Widgets.tooltip("Back to the untouched image")
         }
         depthOfField(session, look)
         grade(session, look)
         finish(session, look)
+        ImGui.dummy(0f, EditorFonts.px(4f))
         Widgets.wrappedText(
             "360 exports skip the look. Depth of field needs the perspective or orthographic projection.",
             EditorTheme.TEXT_DIM.u32
         )
     }
 
+    private fun section(title: String, key: String, trailing: String? = null): Boolean =
+        Widgets.foldout(title, key, context.ui.collapsedSections, true, trailing)
+
     private fun depthOfField(session: EditorSession, look: LookSettings) {
-        Widgets.header("Depth of field")
+        if (!section("Depth of field", "look.dof", if (look.depthOfField) "On" else "Off")) return
         if (Widgets.beginProperties("look-dof")) {
-            Widgets.property("Depth of field", "Blurs everything away from the focus distance, like a real lens")
+            Widgets.property("Enabled", "Blurs everything away from the focus distance, like a real lens")
             Widgets.toggle("##dof", look.depthOfField)?.let { value -> edit(session, "dof") { it.depthOfField = value } }
             if (look.depthOfField) {
                 Widgets.property("Focus on", "Follow an entity, or set the distance by hand and keyframe it on the Focus lane")
@@ -79,7 +82,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
     }
 
     private fun focusPicker(session: EditorSession, look: LookSettings) {
-        val shadow = context.replay?.shadow
+        val shadow = context.replay?.world
         val recorderName = shadow?.localPlayer?.name ?: "Recorder"
         val current = look.focusTargetId
         val label = when (current) {
@@ -105,7 +108,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
     }
 
     private fun grade(session: EditorSession, look: LookSettings) {
-        Widgets.header("Grade")
+        if (!section("Grade", "look.grade", if (look.lut.isEmpty()) null else look.lut.removeSuffix(".cube").removeSuffix(".CUBE"))) return
         if (Widgets.beginProperties("look-grade")) {
             Widgets.property("Exposure", "Stops of brightness")
             Widgets.doubleSlider("##exposure", look.exposure, -3.0, 3.0, "%+.2f EV")
@@ -164,7 +167,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
     }
 
     private fun finish(session: EditorSession, look: LookSettings) {
-        Widgets.header("Finish")
+        if (!section("Finish", "look.finish")) return
         if (Widgets.beginProperties("look-finish")) {
             Widgets.property("Vignette", "Darkens the corners")
             Widgets.doubleSlider("##vignette", look.vignette, 0.0, 1.0, "%.2f")
@@ -215,7 +218,7 @@ class LookPanel(private val context: EditorContext) : AbstractPanel("Look", Dock
     }
 
     private fun entityLabel(id: Int): String {
-        val shadow = context.replay?.shadow ?: return "#$id"
+        val shadow = context.replay?.world ?: return "#$id"
         val entity = shadow.entities[id] ?: return "#$id"
         val name = entity.uuid?.let { shadow.players.profile(it)?.name }
         return name ?: "${entity.kind.name.lowercase().replace('_', ' ')} #$id"

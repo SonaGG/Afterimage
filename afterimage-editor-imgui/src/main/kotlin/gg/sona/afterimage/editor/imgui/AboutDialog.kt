@@ -22,7 +22,6 @@ class AboutDialog(private val context: EditorContext) {
         centered(Brand.NAME, EditorFonts.display, EditorTheme.TEXT.u32)
         centered("Version ${context.host.version} for ${context.host.platformLabel}", EditorFonts.small, EditorTheme.TEXT_MUTED.u32)
         ImGui.dummy(0f, EditorFonts.px(10f))
-        centered("Created by Lunasa", EditorFonts.small, EditorTheme.TEXT_MUTED.u32)
         val style = ImGui.getStyle()
         val bottom = ImGui.getWindowHeight() - style.windowPaddingY - EditorFonts.small.fontSize - style.itemSpacingY
         ImGui.setCursorPosY(maxOf(ImGui.getCursorPosY(), bottom))
