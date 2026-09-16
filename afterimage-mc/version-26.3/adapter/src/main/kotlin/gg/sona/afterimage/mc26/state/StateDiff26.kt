@@ -141,8 +141,10 @@ object StateDiff26 {
             if (previous == null || previous.spawnHash != current.spawnHash) spawned += current else updateEntity(to.codecs, previous, current, nanos, out)
         }
         spawned.sortBy { it.id }
+        val ghosts = SnapshotEncoder26.ghostProfiles(to, spawned, out)
         for (entity in spawned) entity.spawnPackets(out, nanos)
         for (entity in spawned) entity.attachmentPackets(out)
+        if (ghosts.isNotEmpty()) out += ClientboundPlayerInfoRemovePacket(ghosts)
     }
 
     private fun updateEntity(codecs: Codecs26, previous: ShadowEntity26, current: ShadowEntity26, nanos: Long, out: MutableList<Packet<*>>) {

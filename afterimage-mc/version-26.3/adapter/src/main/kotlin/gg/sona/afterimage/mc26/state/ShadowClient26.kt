@@ -37,13 +37,14 @@ import net.minecraft.world.entity.PositionMoveRotation
 import net.minecraft.world.entity.Relative
 import net.minecraft.world.level.GameType
 import net.minecraft.world.phys.Vec3
+import java.util.UUID
 
-class ShadowClient26(override val identity: RecorderIdentity) : ReplayState, WorldState, EntityStates {
+class ShadowClient26(override val identity: RecorderIdentity, knownProfiles: MutableMap<UUID, ShadowPlayer26> = HashMap()) : ReplayState, WorldState, EntityStates {
     val codecs = Codecs26()
     val configuration = ArrayList<CapturedPacket>()
     val level = ShadowLevel26()
     val entityMap = IntObjectMap<ShadowEntity26>(256)
-    override val players = ShadowPlayers26()
+    override val players = ShadowPlayers26(knownProfiles)
     override val scoreboard = ShadowScoreboard26()
     val overlays = ShadowOverlays26()
     override val localPlayer = ShadowLocalPlayer26(identity)
@@ -86,7 +87,6 @@ class ShadowClient26(override val identity: RecorderIdentity) : ReplayState, Wor
         level.clear()
         entityMap.clear()
         players.clear()
-        players.known.clear()
         scoreboard.clear()
         overlays.clear()
         localPlayer.clear()
@@ -372,7 +372,7 @@ class ShadowClient26(override val identity: RecorderIdentity) : ReplayState, Wor
         entityMap.forEach { id, entity -> other.entityMap[id]?.let { entity.adoptTransients(it) } }
     }
 
-    override fun fork(): ReplayState = ShadowClient26(recorderIdentity)
+    override fun fork(): ReplayState = ShadowClient26(recorderIdentity, players.known)
 
     override fun canDiff(target: ReplayState): Boolean = target is ShadowClient26 && StateDiff26.canDiff(this, target)
 

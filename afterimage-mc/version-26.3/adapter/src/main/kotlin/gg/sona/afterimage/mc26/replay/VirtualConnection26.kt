@@ -11,6 +11,7 @@ import gg.sona.afterimage.mc26.net.PacketIds26
 import gg.sona.afterimage.mc26.protocol.Protocol26
 import gg.sona.afterimage.mc26.state.Components26
 import gg.sona.afterimage.mc26.state.ShadowOverlays26
+import gg.sona.afterimage.mc26.state.ShadowPlayers26
 import gg.sona.afterimage.mc26.state.ShadowScoreboard26
 import gg.sona.afterimage.mc26.state.ShadowTeam26
 import gg.sona.afterimage.net.CapturedPacket
@@ -19,6 +20,7 @@ import gg.sona.afterimage.net.PacketDirection
 import gg.sona.afterimage.protocol.AfterimageInternal
 import gg.sona.afterimage.protocol.InternalCodec
 import gg.sona.afterimage.protocol.LocalBlockBreak
+import gg.sona.afterimage.protocol.LocalBlockChange
 import gg.sona.afterimage.protocol.LocalTarget
 import gg.sona.afterimage.protocol.OverlayReset
 import gg.sona.afterimage.replay.consumer.DeliveryMode
@@ -42,7 +44,9 @@ import net.minecraft.client.multiplayer.chat.GuiMessageSource
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
 import net.minecraft.core.RegistryAccess
+import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.network.Connection
+import net.minecraft.network.FriendlyByteBuf
 import net.minecraft.network.RegistryFriendlyByteBuf
 import net.minecraft.network.UnconfiguredPipelineHandler
 import net.minecraft.network.codec.StreamCodec
@@ -50,6 +54,8 @@ import net.minecraft.network.protocol.Packet
 import net.minecraft.network.protocol.PacketFlow
 import net.minecraft.network.protocol.configuration.ConfigurationProtocols
 import net.minecraft.network.protocol.game.ClientboundPlayerChatPacket
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket
 import net.minecraft.network.protocol.game.ClientboundSetObjectivePacket
 import net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket
@@ -59,8 +65,11 @@ import net.minecraft.network.protocol.game.ClientboundSystemChatPacket
 import net.minecraft.network.protocol.game.GameProtocols
 import net.minecraft.server.ServerLinks
 import net.minecraft.world.clock.ClockNetworkState
+import net.minecraft.world.entity.EntityTypes
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.flag.FeatureFlags
+import net.minecraft.world.level.GameType
+import net.minecraft.world.level.block.Block
 import org.slf4j.LoggerFactory
 import java.util.*
 import kotlin.math.abs
@@ -91,6 +100,7 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
     var chunkRadius: () -> Int? = { null }
     var targetFace: () -> Int = { -1 }
     var snapOnSeek: () -> Boolean = { true }
+    var profileLookup: (UUID) -> ClientboundPlayerInfoUpdatePacket.Entry? = { null }
 
     val isOpen: Boolean get() = channel != null
 
@@ -148,11 +158,13 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
             return
         }
         if (packet.direction != PacketDirection.CLIENTBOUND) {
-            if (packet.packetId == AfterimageInternal.LOCAL_BLOCK_BREAK && mode != DeliveryMode.SEEK) {
-                (InternalCodec.decode(packet) as? LocalBlockBreak)?.let {
+            when (packet.packetId) {
+                AfterimageInternal.LOCAL_BLOCK_BREAK -> if (mode != DeliveryMode.SEEK) (InternalCodec.decode(packet) as? LocalBlockBreak)?.let {
                     AfterimageHooks26.reseedForPacket(packet.timestampNanos)
                     addMiningParticles(it)
                 }
+
+                AfterimageInternal.LOCAL_BLOCK_CHANGE -> (InternalCodec.decode(packet) as? LocalBlockChange)?.let { applyLocalBlockChange(it) }
             }
             return
         }
@@ -165,6 +177,7 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
         if (!PacketIds26.isConfiguration(packet.packetId)) {
             when (wireId) {
                 PacketIds26.LOGIN -> dropStalePlayer()
+                PacketIds26.PLAYER_INFO_REMOVE -> retainPlayerInfo(packet)
                 PacketIds26.FORGET_LEVEL_CHUNK -> if (chunkCenter() != null) return
                 PacketIds26.LEVEL_CHUNK_WITH_LIGHT -> chunkCenter()?.let { center ->
                     val radius = chunkRadius() ?: return@let
@@ -180,6 +193,7 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
                 PacketIds26.SET_TIME -> payload = rewriteTime(packet) ?: payload
             }
         }
+        val ghost = if (wireId == PacketIds26.ADD_ENTITY && !PacketIds26.isConfiguration(packet.packetId)) ensureSpawnProfile(payload) else null
         val buffer = Unpooled.buffer(payload.size + 5)
         writeVarInt(buffer, wireId)
         buffer.writeBytes(payload)
@@ -191,6 +205,43 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
         } catch (error: Throwable) {
             failures++
             if (failures <= LOG_FAILURES) LOGGER.error("Afterimage replay could not deliver {}", packet, error)
+        }
+        if (ghost != null) {
+            retainPlayerInfo(listOf(ghost))
+            deliverDecoded(ClientboundPlayerInfoRemovePacket(listOf(ghost)))
+        }
+    }
+
+    private fun ensureSpawnProfile(payload: ByteArray): UUID? {
+        val listener = handler ?: return null
+        val buffer = FriendlyByteBuf(Unpooled.wrappedBuffer(payload))
+        try {
+            buffer.readVarInt()
+            val uuid = buffer.readUUID()
+            if (buffer.readVarInt() != PLAYER_TYPE_ID) return null
+            if (listener.getPlayerInfo(uuid) != null) return null
+            val entry = profileLookup(uuid) ?: ClientboundPlayerInfoUpdatePacket.Entry(
+                uuid, GameProfile(uuid, uuid.toString().take(16)), false, 0, GameType.SURVIVAL, null, true, 0, null,
+            )
+            deliverDecoded(ShadowPlayers26.addPacket(listOf(entry)))
+            return uuid
+        } catch (error: Exception) {
+            return null
+        } finally {
+            buffer.release()
+        }
+    }
+
+    private fun retainPlayerInfo(packet: CapturedPacket) {
+        val decoded = decode(packet) as? ClientboundPlayerInfoRemovePacket ?: return
+        retainPlayerInfo(decoded.profileIds())
+    }
+
+    private fun retainPlayerInfo(uuids: List<UUID>) {
+        val level = minecraft.level ?: return
+        for (player in level.players()) {
+            if (player === minecraft.player || player.uuid !in uuids) continue
+            player.skin
         }
     }
 
@@ -364,6 +415,14 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
         hud.afterimage_setOverlayMessageTime(remaining.coerceAtLeast(0))
     }
 
+    private fun applyLocalBlockChange(packet: LocalBlockChange) {
+        val level = minecraft.level ?: return
+        val pos = BlockPos(PackedPosition.x(packet.position), PackedPosition.y(packet.position), PackedPosition.z(packet.position))
+        if (!level.hasChunkAt(pos)) return
+        val state = Block.stateById(packet.state)
+        if (level.getBlockState(pos) != state) level.setBlock(pos, state, LOCAL_BLOCK_FLAGS)
+    }
+
     private fun addMiningParticles(packet: LocalBlockBreak) {
         val level = minecraft.level ?: return
         if (packet.stage < 0) return
@@ -407,11 +466,13 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
     companion object {
         private const val LOG_FAILURES = 8L
         private const val ACTION_BAR_TICKS = 60
+        private const val LOCAL_BLOCK_FLAGS = Block.UPDATE_NEIGHBORS or Block.UPDATE_CLIENTS or Block.UPDATE_IMMEDIATE
         private const val DROP_OUTBOUND = "afterimage_drop_outbound"
         private const val INBOUND_CONFIG = "inbound_config"
         private const val OUTBOUND_CONFIG = "outbound_config"
         private const val PACKET_HANDLER = "packet_handler"
         private val LOGGER = LoggerFactory.getLogger("Afterimage")
+        private val PLAYER_TYPE_ID: Int by lazy { BuiltInRegistries.ENTITY_TYPE.getId(EntityTypes.PLAYER) }
 
         val ANONYMOUS = GameProfile(UUID(0L, 0L), "Afterimage")
     }

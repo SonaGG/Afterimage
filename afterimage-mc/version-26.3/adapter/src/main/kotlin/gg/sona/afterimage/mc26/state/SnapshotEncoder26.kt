@@ -1,10 +1,16 @@
 package gg.sona.afterimage.mc26.state
 
+import com.mojang.authlib.GameProfile
 import gg.sona.afterimage.net.CapturedPacket
 import gg.sona.afterimage.protocol.InternalCodec
 import net.minecraft.network.protocol.Packet
 import net.minecraft.network.protocol.game.ClientboundGameEventPacket
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket
 import net.minecraft.network.protocol.game.ClientboundSetTimePacket
+import net.minecraft.world.entity.EntityTypes
+import net.minecraft.world.level.GameType
+import java.util.UUID
 
 object SnapshotEncoder26 {
     fun encode(client: ShadowClient26, nanos: Long): List<CapturedPacket> {
@@ -47,7 +53,24 @@ object SnapshotEncoder26 {
 
     fun entityPackets(client: ShadowClient26, nanos: Long, out: MutableList<Packet<*>>) {
         val entities = client.entityMap.values().filter { it.visibleAt(nanos) }.sortedBy { it.id }
+        val ghosts = ghostProfiles(client, entities, out)
         for (entity in entities) entity.spawnPackets(out, nanos)
         for (entity in entities) entity.attachmentPackets(out)
+        if (ghosts.isNotEmpty()) out += ClientboundPlayerInfoRemovePacket(ghosts)
+    }
+
+    fun ghostProfiles(client: ShadowClient26, spawned: List<ShadowEntity26>, out: MutableList<Packet<*>>): List<UUID> {
+        val players = client.players
+        val ghosts = LinkedHashMap<UUID, ClientboundPlayerInfoUpdatePacket.Entry>()
+        for (entity in spawned) {
+            if (entity.entityType !== EntityTypes.PLAYER) continue
+            val uuid = entity.add.uuid
+            if (players.entries.containsKey(uuid) || ghosts.containsKey(uuid)) continue
+            ghosts[uuid] = players.known[uuid]?.entry ?: ClientboundPlayerInfoUpdatePacket.Entry(
+                uuid, GameProfile(uuid, uuid.toString().take(16)), false, 0, GameType.SURVIVAL, null, true, 0, null,
+            )
+        }
+        if (ghosts.isNotEmpty()) out += ShadowPlayers26.addPacket(ghosts.values.toList())
+        return ghosts.keys.toList()
     }
 }

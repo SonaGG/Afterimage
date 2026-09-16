@@ -31,9 +31,8 @@ class ShadowPlayer26(override val uuid: UUID, var entry: ClientboundPlayerInfoUp
     override val displayNameJson: String? get() = entry.displayName()?.string
 }
 
-class ShadowPlayers26 : PlayerListState {
+class ShadowPlayers26(val known: MutableMap<UUID, ShadowPlayer26> = HashMap()) : PlayerListState {
     val entries = LinkedHashMap<UUID, ShadowPlayer26>()
-    val known = HashMap<UUID, ShadowPlayer26>()
     var tabList: ClientboundTabListPacket? = null
 
     override val listed: Collection<PlayerProfile> get() = entries.values

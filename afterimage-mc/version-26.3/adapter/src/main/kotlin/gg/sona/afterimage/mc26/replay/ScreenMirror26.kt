@@ -27,6 +27,7 @@ import net.minecraft.client.gui.screens.inventory.SignEditScreen
 import net.minecraft.client.player.LocalPlayer
 import net.minecraft.core.BlockPos
 import net.minecraft.network.chat.Component
+import net.minecraft.resources.Identifier
 import net.minecraft.world.InteractionHand
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.inventory.AbstractContainerMenu
@@ -309,17 +310,9 @@ class ScreenMirror26(private val minecraft: Minecraft, private val cameraDriver:
 
     private fun drawCursor(graphics: GuiGraphicsExtractor, x: Int, y: Int) {
         graphics.nextStratum()
-        for (row in CURSOR.indices) {
-            val line = CURSOR[row]
-            for (column in line.indices) {
-                val color = when (line[column]) {
-                    '#' -> 0xFF000000.toInt()
-                    'o' -> 0xFFFFFFFF.toInt()
-                    else -> continue
-                }
-                graphics.fill(x + column, y + row, x + column + 1, y + row + 1, color)
-            }
-        }
+        val left = x - CURSOR_HOTSPOT_X
+        val top = y - CURSOR_HOTSPOT_Y
+        graphics.blit(CURSOR_TEXTURE, left, top, left + CURSOR_WIDTH, top + CURSOR_HEIGHT, 0f, 1f, 0f, 1f)
     }
 
     private class MirrorChatScreen(draft: String) : ChatScreen(draft, true, false) {
@@ -354,23 +347,10 @@ class ScreenMirror26(private val minecraft: Minecraft, private val cameraDriver:
     }
 
     private companion object {
-        val CURSOR = arrayOf(
-            "#",
-            "##",
-            "#o#",
-            "#oo#",
-            "#ooo#",
-            "#oooo#",
-            "#ooooo#",
-            "#oooooo#",
-            "#ooooooo#",
-            "#ooooo####",
-            "#oo#oo#",
-            "#o##oo#",
-            "##  #oo#",
-            "#    #oo#",
-            "      #oo#",
-            "       ##",
-        )
+        val CURSOR_TEXTURE: Identifier = Identifier.fromNamespaceAndPath("afterimage", "textures/gui/cursor.png")
+        const val CURSOR_WIDTH = 15
+        const val CURSOR_HEIGHT = 22
+        const val CURSOR_HOTSPOT_X = 1
+        const val CURSOR_HOTSPOT_Y = 0
     }
 }

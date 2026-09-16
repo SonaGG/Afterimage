@@ -5,6 +5,7 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.prediction.BlockStatePredictionHandler;
+import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.state.BlockState;
@@ -18,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(ClientLevel.class)
-public abstract class ClientLevelMixin {
+public abstract class ClientLevelMixin implements BlockAndTintGetter {
     @Shadow
     abstract BlockStatePredictionHandler getBlockStatePredictionHandler();
 
@@ -27,6 +28,11 @@ public abstract class ClientLevelMixin {
         if (callback.getReturnValueZ() && getBlockStatePredictionHandler().isPredicting()) {
             if ((Object) this == Minecraft.getInstance().level) AfterimageHooks26.onLocalBlockChange(pos, state);
         }
+    }
+
+    @Inject(method = "syncBlockState", at = @At("HEAD"))
+    private void afterimage$onSyncBlockState(BlockPos pos, BlockState state, Vec3 playerPos, CallbackInfo callback) {
+        if ((Object) this == Minecraft.getInstance().level && getBlockState(pos) != state) AfterimageHooks26.onLocalBlockChange(pos, state);
     }
 
     @Redirect(method = "doAddParticle", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Camera;position()Lnet/minecraft/world/phys/Vec3;"))

@@ -9,6 +9,7 @@ import io.netty.buffer.Unpooled
 import net.minecraft.block.entity.SignBlockEntity
 import net.minecraft.client.Minecraft
 import net.minecraft.client.entity.living.player.ClientPlayerEntity
+import net.minecraft.client.gui.GuiElement
 import net.minecraft.client.gui.screen.ChatScreen
 import net.minecraft.client.gui.screen.DeathScreen
 import net.minecraft.client.gui.screen.GameMenuScreen
@@ -33,6 +34,7 @@ import net.minecraft.item.Items
 import net.minecraft.nbt.NbtList
 import net.minecraft.nbt.NbtString
 import net.minecraft.network.PacketByteBuf
+import net.minecraft.resource.Identifier
 import net.minecraft.text.LiteralText
 import net.minecraft.text.Text
 import net.minecraft.util.math.BlockPos
@@ -409,30 +411,19 @@ class ScreenMirror(
     }.coerceIn(0, maxOf(0, height - 1))
 
     private fun drawCursor(x: Int, y: Int) {
-        GlStateManager.disableTexture()
+        GlStateManager.enableTexture()
         GlStateManager.disableLighting()
         GlStateManager.disableDepthTest()
         GlStateManager.enableBlend()
         GlStateManager.blendFuncSeparate(770, 771, 1, 0)
+        GlStateManager.color4f(1f, 1f, 1f, 1f)
+        minecraft.textureManager.bind(CURSOR_TEXTURE)
         GlStateManager.pushMatrix()
-        GlStateManager.translatef(x.toFloat(), y.toFloat(), 400f)
-        polygon(CURSOR_OUTLINE, 0f, 0f, 0f, 0.9f)
-        polygon(CURSOR_FILL, 1f, 1f, 1f, 1f)
+        GlStateManager.translatef(0f, 0f, 400f)
+        GuiElement.drawTexture(x - CURSOR_HOTSPOT_X, y - CURSOR_HOTSPOT_Y, 0f, 0f, CURSOR_WIDTH, CURSOR_HEIGHT, CURSOR_WIDTH.toFloat(), CURSOR_HEIGHT.toFloat())
         GlStateManager.popMatrix()
         GlStateManager.disableBlend()
-        GlStateManager.enableTexture()
         GlStateManager.color4f(1f, 1f, 1f, 1f)
-    }
-
-    private fun polygon(points: FloatArray, r: Float, g: Float, b: Float, a: Float) {
-        GlStateManager.color4f(r, g, b, a)
-        GL11.glBegin(GL11.GL_TRIANGLE_FAN)
-        var index = 0
-        while (index < points.size) {
-            GL11.glVertex2f(points[index], points[index + 1])
-            index += 2
-        }
-        GL11.glEnd()
     }
 
     private fun restoreGuiState() {
@@ -504,8 +495,10 @@ class ScreenMirror(
     }
 
     private companion object {
-        val CURSOR_OUTLINE =
-            floatArrayOf(-1f, -1f, -1f, 13.5f, 2.6f, 10.2f, 5.2f, 15.6f, 8.6f, 14.1f, 6f, 8.9f, 10.7f, 8.9f)
-        val CURSOR_FILL = floatArrayOf(0f, 0f, 0f, 11f, 2.8f, 8.4f, 5.2f, 13.4f, 6.8f, 12.7f, 4.5f, 7.6f, 8.2f, 7.6f)
+        val CURSOR_TEXTURE = Identifier("afterimage", "textures/gui/cursor.png")
+        const val CURSOR_WIDTH = 15
+        const val CURSOR_HEIGHT = 22
+        const val CURSOR_HOTSPOT_X = 1
+        const val CURSOR_HOTSPOT_Y = 0
     }
 }

@@ -126,6 +126,7 @@ class ReplayController26(private val platform: MinecraftPlatform26, val camera: 
             mirror.chunkCenter = { cameraChunk() }
             mirror.chunkRadius = { minecraft.options.effectiveRenderDistance.coerceAtLeast(2) }
             mirror.targetFace = { shadow.localPlayer.target?.face ?: -1 }
+            mirror.profileLookup = { uuid -> shadow.players.profile(uuid)?.entry }
             val projection = RecorderProjection26(shadow, mirror)
             projection.recorderMissing = { id ->
                 val level = minecraft.level

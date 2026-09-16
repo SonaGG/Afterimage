@@ -18,7 +18,6 @@ import gg.sona.afterimage.net.PacketDirection
 import gg.sona.afterimage.protocol.AfterimageInternal
 import gg.sona.afterimage.protocol.InternalCodec
 import gg.sona.afterimage.protocol.LocalBlockBreak
-import gg.sona.afterimage.protocol.LocalBlockChange
 import gg.sona.afterimage.protocol.LocalPose
 import gg.sona.afterimage.replay.consumer.DeliveryMode
 import gg.sona.afterimage.replay.consumer.ReplayConsumer
@@ -342,7 +341,6 @@ class RecorderProjection26(private val shadow: ShadowClient26, private val downs
                     forward(packet, mode)
                 }
 
-                is LocalBlockChange -> emit(ClientboundBlockUpdatePacket(blockPos(internal.position), Block.stateById(internal.state)), nanos, mode)
                 else -> forward(packet, mode)
             }
             return
