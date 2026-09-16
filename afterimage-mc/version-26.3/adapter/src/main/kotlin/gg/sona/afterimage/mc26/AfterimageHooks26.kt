@@ -25,9 +25,11 @@ import net.minecraft.client.resources.sounds.SoundInstance
 import net.minecraft.client.sounds.SoundEngine
 import net.minecraft.core.BlockPos
 import net.minecraft.network.Connection
+import net.minecraft.world.InteractionHand
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.player.Player
+import net.minecraft.world.item.component.SwingAnimation
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.Vec3
 import org.joml.Matrix4f
@@ -425,6 +427,27 @@ object AfterimageHooks26 {
 
     @JvmStatic
     fun onBlockMiningProgress(breakerId: Int, pos: BlockPos, progress: Int) = runTask("mining progress") { it.recorder.onBlockMiningProgress(breakerId, pos, progress) }
+
+    @JvmStatic
+    fun onSwing(entity: LivingEntity, hand: InteractionHand, animation: SwingAnimation) {
+        val current = runtime ?: return
+        if (entity !== current.minecraft.player) return
+        runTask("swing") { it.recorder.onLocalSwing(hand, animation) }
+    }
+
+    @JvmStatic
+    fun onAttackReset(player: Player) {
+        val current = runtime ?: return
+        if (player !== current.minecraft.player) return
+        runTask("attack reset") { it.recorder.onLocalAttackReset() }
+    }
+
+    @JvmStatic
+    fun onItemUsed(player: LocalPlayer, hand: InteractionHand) {
+        val current = runtime ?: return
+        if (player !== current.minecraft.player) return
+        runTask("item used") { it.recorder.onLocalItemUsed(hand) }
+    }
 
     @JvmStatic
     fun reseedForPacket(timestampNanos: Long) {

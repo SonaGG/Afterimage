@@ -30,11 +30,14 @@ import gg.sona.afterimage.net.PacketDirection
 import gg.sona.afterimage.net.PacketWriter
 import gg.sona.afterimage.protocol.LocalBlockBreak
 import gg.sona.afterimage.protocol.LocalBlockChange
+import gg.sona.afterimage.protocol.LocalHand
 import gg.sona.afterimage.protocol.LocalScreen
 import gg.sona.afterimage.protocol.LocalTarget
 import gg.sona.afterimage.protocol.AfterimageInternal
 import gg.sona.afterimage.protocol.ServerboundPacket
 import net.minecraft.core.BlockPos
+import net.minecraft.world.InteractionHand
+import net.minecraft.world.item.component.SwingAnimation
 import net.minecraft.world.level.block.Block
 import net.minecraft.world.level.block.state.BlockState
 import net.minecraft.world.phys.BlockHitResult
@@ -177,6 +180,20 @@ class RecordingController26(private val minecraft: Minecraft, private val store:
         if (id < 0) return
         offer(session, LocalBlockChange(PackedPosition.pack(pos.x, pos.y, pos.z), id))
     }
+
+    fun onLocalSwing(hand: InteractionHand, animation: SwingAnimation) = onLocalHand(LocalHand(LocalHand.SWING, handOf(hand), animation.type().id, animation.duration()))
+
+    fun onLocalAttackReset() = onLocalHand(LocalHand(LocalHand.RESET_ATTACK, LocalHand.MAIN_HAND))
+
+    fun onLocalItemUsed(hand: InteractionHand) = onLocalHand(LocalHand(LocalHand.ITEM_USED, handOf(hand)))
+
+    private fun onLocalHand(packet: LocalHand) {
+        val session = live ?: return
+        if (!session.capture.isRecording) return
+        offer(session, packet)
+    }
+
+    private fun handOf(hand: InteractionHand): Int = if (hand == InteractionHand.OFF_HAND) LocalHand.OFF_HAND else LocalHand.MAIN_HAND
 
     fun onBlockMiningProgress(breakerId: Int, pos: BlockPos, stage: Int) {
         val session = live ?: return

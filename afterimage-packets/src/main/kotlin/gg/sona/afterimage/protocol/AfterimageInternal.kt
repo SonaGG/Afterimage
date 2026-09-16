@@ -14,6 +14,7 @@ object AfterimageInternal {
     const val LOCAL_TICK = 0x109
     const val LOCAL_TARGET = 0x10A
     const val LOCAL_BLOCK_CHANGE = 0x10B
+    const val LOCAL_HAND = 0x10C
 
     fun isInternal(packetId: Int): Boolean = packetId >= FIRST_ID
 }

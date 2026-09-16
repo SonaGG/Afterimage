@@ -68,10 +68,10 @@ class ShadowLocalPlayer26(identity: RecorderIdentity) : LocalPlayerState {
     val effects = LinkedHashMap<Holder<*>, ShadowEffect26>()
     override val history = MotionHistory()
     override val cameraFrames = CameraSamples()
-    var lastSwingNanos: Long = Long.MIN_VALUE
+    val swings = ShadowSwings26()
+    var lastAttackNanos: Long = Long.MIN_VALUE
     var hurtAtNanos: Long = Long.MIN_VALUE
     var deadAtNanos: Long = Long.MIN_VALUE
-    var lastSwingArm: Int = 0
 
     override val gameMode: Int get() = gameType.id
     override val isSpectator: Boolean get() = gameType == GameType.SPECTATOR
@@ -174,13 +174,16 @@ class ShadowLocalPlayer26(identity: RecorderIdentity) : LocalPlayerState {
     }
 
     fun adoptTransients(other: ShadowLocalPlayer26) {
-        lastSwingNanos = other.lastSwingNanos
+        swings.copyFrom(other.swings)
+        lastAttackNanos = other.lastAttackNanos
         hurtAtNanos = other.hurtAtNanos
         deadAtNanos = other.deadAtNanos
     }
 
     fun resetForRespawn() {
         effects.clear()
+        swings.clear()
+        lastAttackNanos = Long.MIN_VALUE
         camera = null
         vehicleId = -1
         deadAtNanos = Long.MIN_VALUE
@@ -207,7 +210,8 @@ class ShadowLocalPlayer26(identity: RecorderIdentity) : LocalPlayerState {
         data.clear()
         attributes.clear()
         effects.clear()
-        lastSwingNanos = Long.MIN_VALUE
+        swings.clear()
+        lastAttackNanos = Long.MIN_VALUE
         hurtAtNanos = Long.MIN_VALUE
         deadAtNanos = Long.MIN_VALUE
     }

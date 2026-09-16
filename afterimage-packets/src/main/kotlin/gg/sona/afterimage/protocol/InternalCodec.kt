@@ -24,6 +24,7 @@ object InternalCodec {
         AfterimageInternal.LOCAL_BLOCK_BREAK -> LocalBlockBreak(reader.readPosition(), reader.readByte().toInt())
         AfterimageInternal.LOCAL_TICK -> LocalTick
         AfterimageInternal.LOCAL_BLOCK_CHANGE -> LocalBlockChange(reader.readPosition(), reader.readVarInt())
+        AfterimageInternal.LOCAL_HAND -> LocalHand(reader.readUnsignedByte(), reader.readUnsignedByte(), reader.readUnsignedByte(), reader.readVarInt())
         AfterimageInternal.LOCAL_TARGET -> LocalTarget(reader.readPosition(), reader.readByte().toInt())
         AfterimageInternal.LOCAL_SCREEN -> LocalScreen(
             reader.readUnsignedByte(),
@@ -58,6 +59,7 @@ object InternalCodec {
             is LocalBlockBreak -> writer.writePosition(packet.position).writeByte(packet.stage)
             LocalTick -> Unit
             is LocalBlockChange -> writer.writePosition(packet.position).writeVarInt(packet.state)
+            is LocalHand -> writer.writeByte(packet.action).writeByte(packet.hand).writeByte(packet.animation).writeVarInt(packet.duration)
             is LocalTarget -> writer.writePosition(packet.position).writeByte(packet.face)
             is LocalScreen -> writer.writeByte(packet.kind).writeByte(packet.windowId).writeShort(packet.mouseX)
                 .writeShort(packet.mouseY)

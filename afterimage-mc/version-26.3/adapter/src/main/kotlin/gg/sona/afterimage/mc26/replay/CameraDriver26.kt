@@ -9,9 +9,11 @@ import gg.sona.afterimage.editor.host.CameraControl
 import gg.sona.afterimage.mc.common.ExportCamera
 import gg.sona.afterimage.mc.common.SceneCamera
 import gg.sona.afterimage.mc.common.SceneCameraHost
+import gg.sona.afterimage.mc.common.SwingState
 import gg.sona.afterimage.mc26.mixin.CameraAccessor
 import gg.sona.afterimage.mc26.mixin.HudAccessor
 import gg.sona.afterimage.mc26.mixin.KeyMappingAccessor
+import gg.sona.afterimage.mc26.mixin.LivingEntityAccessor
 import gg.sona.afterimage.net.PackedPosition
 import gg.sona.afterimage.protocol.LocalScreen
 import gg.sona.afterimage.replay.session.ReplaySession
@@ -472,12 +474,18 @@ class CameraDriver26(private val minecraft: Minecraft, private val picker: Viewp
         return handTarget() == null
     }
 
+    fun onSettleStart() {
+        minecraft.player?.let { SwingState26.reset(it) }
+    }
+
     fun onSeeked(replay: ReplaySession) {
-        if (settings.mode != CameraMode.FIRST_PERSON || !settings.targetsRecorder()) return
+        if (replay.settling || settings.mode != CameraMode.FIRST_PERSON || !settings.targetsRecorder()) return
         val player = minecraft.player ?: return
         val local = replay.shadow26.localPlayer
-        val duration = SwingState26.duration(local.effects.values, replay.positionNanos)
-        SwingState26.apply(player, SwingState26.at(local.lastSwingNanos, replay.lastTickNanos, duration), duration)
+        SwingState26.apply(player, local.swings, local.effects.values, replay.lastTickNanos)
+        val attackTicks = SwingState.ticksSince(local.lastAttackNanos, replay.lastTickNanos).coerceAtMost(MAX_ATTACK_TICKS)
+        (player as LivingEntityAccessor).afterimage_setAttackStrengthTicker(attackTicks)
+        (player as LivingEntityAccessor).afterimage_setItemSwapTicker(attackTicks)
     }
 
     private fun placeExactRecorderView(replay: ReplaySession): Boolean {
@@ -706,4 +714,8 @@ class CameraDriver26(private val minecraft: Minecraft, private val picker: Viewp
     }
 
     private fun effectiveFov(): Double = if (settings.overrideFov) settings.fov else minecraft.options.fov().get().toDouble()
+
+    private companion object {
+        const val MAX_ATTACK_TICKS = 1 shl 20
+    }
 }

@@ -53,7 +53,7 @@ class ShadowEntity26(val add: ClientboundAddEntityPacket, override val spawnedAt
     override var dead: Boolean = false
     var deadAtNanos: Long = Long.MIN_VALUE
     var hurtAtNanos: Long = Long.MIN_VALUE
-    var swingAtNanos: Long = Long.MIN_VALUE
+    val swings = ShadowSwings26()
     var motion: ClientboundSetEntityMotionPacket? = null
     var passengers: ClientboundSetPassengersPacket? = null
     var link: ClientboundSetEntityLinkPacket? = null
@@ -108,7 +108,7 @@ class ShadowEntity26(val add: ClientboundAddEntityPacket, override val spawnedAt
     fun adoptTransients(other: ShadowEntity26) {
         deadAtNanos = other.deadAtNanos
         hurtAtNanos = other.hurtAtNanos
-        swingAtNanos = other.swingAtNanos
+        swings.copyFrom(other.swings)
     }
 
     fun spawnPackets(out: MutableList<Packet<*>>, nanos: Long) {

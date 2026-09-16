@@ -137,6 +137,7 @@ class ReplayController26(private val platform: MinecraftPlatform26, val camera: 
             replay.tickHook = onWorldTick
             replay.listeners.add(object : ReplayListener {
                 override fun onSettleStart(positionNanos: Long) {
+                    camera.onSettleStart()
                     seekRestorer?.prepare(replay, mirror, SETTLE_NANOS)
                 }
 

@@ -7,6 +7,8 @@ import gg.sona.afterimage.mc.common.SwingState
 import gg.sona.afterimage.mc26.mixin.ExperienceOrbAccessor
 import gg.sona.afterimage.mc26.mixin.ItemEntityAccessor
 import gg.sona.afterimage.mc26.protocol.Protocol26
+import gg.sona.afterimage.mc26.state.ShadowEffect26
+import gg.sona.afterimage.mc26.state.ShadowSwings26
 import gg.sona.afterimage.replay.session.ReplaySession
 import net.minecraft.client.Minecraft
 import net.minecraft.world.entity.Entity
@@ -48,14 +50,14 @@ class SeekRestorer26(
         val position = replay.positionNanos
         val lastTick = replay.lastTickNanos
         try {
-            restoreEntities(replay, position, lastTick)
+            restoreEntities(replay, position, lastTick, settled)
             if (!settled) rebuildParticles(replay, mirror, position, lastTick, PARTICLE_LIFETIME_NANOS)
         } catch (error: Throwable) {
             logger.error("Afterimage could not restore transient state after a seek", error)
         }
     }
 
-    private fun restoreEntities(replay: ReplaySession, position: Long, lastTick: Long) {
+    private fun restoreEntities(replay: ReplaySession, position: Long, lastTick: Long, settled: Boolean) {
         val level = minecraft.level ?: return
         val shadow = replay.shadow26
         shadow.entityMap.forEach { id, tracked ->
@@ -66,14 +68,14 @@ class SeekRestorer26(
                 level.removeEntity(id, Entity.RemovalReason.DISCARDED)
                 return@forEach
             }
+            if (settled) return@forEach
             val deadAt = if (tracked.dead) tracked.deadAtNanos else Long.MIN_VALUE
-            val duration = SwingState26.duration(tracked.effects.values, position)
-            restoreLiving(entity, tracked.hurtAtNanos, deadAt, tracked.swingAtNanos, duration, lastTick)
+            restoreLiving(entity, tracked.hurtAtNanos, deadAt, tracked.swings, tracked.effects.values, lastTick)
         }
         val local = shadow.localPlayer
         val proxy = level.getEntity(local.entityId) as? LivingEntity ?: return
-        if (proxy === minecraft.player) return
-        restoreLiving(proxy, local.hurtAtNanos, local.deadAtNanos, local.lastSwingNanos, SwingState26.duration(local.effects.values, position), lastTick)
+        if (proxy === minecraft.player || settled) return
+        restoreLiving(proxy, local.hurtAtNanos, local.deadAtNanos, local.swings, local.effects.values, lastTick)
     }
 
 
@@ -88,7 +90,7 @@ class SeekRestorer26(
         }
     }
 
-    private fun restoreLiving(entity: LivingEntity, hurtAt: Long, deadAt: Long, swingAt: Long, swingDuration: Int, lastTick: Long) {
+    private fun restoreLiving(entity: LivingEntity, hurtAt: Long, deadAt: Long, swings: ShadowSwings26, effects: Collection<ShadowEffect26>, lastTick: Long) {
         val hurt = SwingState.ticksSince(hurtAt, lastTick)
         entity.hurtTime = (HURT_TICKS - hurt).coerceIn(0, HURT_TICKS)
         entity.hurtDuration = HURT_TICKS
@@ -98,7 +100,7 @@ class SeekRestorer26(
         } else if (entity.deathTime > 0) {
             entity.deathTime = 0
         }
-        SwingState26.apply(entity, SwingState.at(swingAt, lastTick, swingDuration), swingDuration)
+        SwingState26.apply(entity, swings, effects, lastTick)
     }
 
     private fun rebuildParticles(replay: ReplaySession, mirror: VirtualConnection26, position: Long, lastTick: Long, windowNanos: Long) {

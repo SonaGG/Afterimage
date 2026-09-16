@@ -13,6 +13,7 @@ import gg.sona.afterimage.mc26.state.Components26
 import gg.sona.afterimage.mc26.state.ShadowOverlays26
 import gg.sona.afterimage.mc26.state.ShadowPlayers26
 import gg.sona.afterimage.mc26.state.ShadowScoreboard26
+import gg.sona.afterimage.mc26.state.ShadowSwings26
 import gg.sona.afterimage.mc26.state.ShadowTeam26
 import gg.sona.afterimage.net.CapturedPacket
 import gg.sona.afterimage.net.PackedPosition
@@ -21,6 +22,7 @@ import gg.sona.afterimage.protocol.AfterimageInternal
 import gg.sona.afterimage.protocol.InternalCodec
 import gg.sona.afterimage.protocol.LocalBlockBreak
 import gg.sona.afterimage.protocol.LocalBlockChange
+import gg.sona.afterimage.protocol.LocalHand
 import gg.sona.afterimage.protocol.LocalTarget
 import gg.sona.afterimage.protocol.OverlayReset
 import gg.sona.afterimage.replay.consumer.DeliveryMode
@@ -165,6 +167,7 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
                 }
 
                 AfterimageInternal.LOCAL_BLOCK_CHANGE -> (InternalCodec.decode(packet) as? LocalBlockChange)?.let { applyLocalBlockChange(it) }
+                AfterimageInternal.LOCAL_HAND -> (InternalCodec.decode(packet) as? LocalHand)?.let { applyLocalHand(it) }
             }
             return
         }
@@ -413,6 +416,15 @@ class VirtualConnection26(private val minecraft: Minecraft, private val profile:
         val hud = minecraft.gui.hud as HudAccessor
         val remaining = if (ageNanos < 0) 0 else ACTION_BAR_TICKS - (ageNanos / Nanos.PER_TICK).toInt()
         hud.afterimage_setOverlayMessageTime(remaining.coerceAtLeast(0))
+    }
+
+    private fun applyLocalHand(packet: LocalHand) {
+        val player = minecraft.player ?: return
+        if (player.connection !== handler) return
+        when (packet.action) {
+            LocalHand.RESET_ATTACK -> player.resetAttackStrengthTicker()
+            LocalHand.ITEM_USED -> player.itemUsed(ShadowSwings26.handOf(packet))
+        }
     }
 
     private fun applyLocalBlockChange(packet: LocalBlockChange) {

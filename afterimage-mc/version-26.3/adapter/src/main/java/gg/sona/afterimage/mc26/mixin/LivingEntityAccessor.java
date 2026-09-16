@@ -8,4 +8,10 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface LivingEntityAccessor {
     @Accessor("swingState")
     LivingEntity.SwingState afterimage_swingState();
+
+    @Accessor("attackStrengthTicker")
+    void afterimage_setAttackStrengthTicker(int ticks);
+
+    @Accessor("itemSwapTicker")
+    void afterimage_setItemSwapTicker(int ticks);
 }

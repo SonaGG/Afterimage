@@ -14,6 +14,7 @@ import gg.sona.afterimage.protocol.InternalCodec
 import gg.sona.afterimage.protocol.LocalBlockChange
 import gg.sona.afterimage.protocol.LocalPose
 import gg.sona.afterimage.protocol.LocalScreen
+import gg.sona.afterimage.protocol.LocalHand
 import gg.sona.afterimage.protocol.LocalTarget
 import gg.sona.afterimage.protocol.OverlayReset
 import gg.sona.afterimage.protocol.ServerboundPacket
@@ -142,6 +143,7 @@ class ShadowClient26(override val identity: RecorderIdentity, knownProfiles: Mut
             is OverlayReset -> overlays.apply(packet, nanos)
             is LocalScreen -> localPlayer.screen = packet
             is LocalTarget -> localPlayer.target = packet
+            is LocalHand -> if (packet.isSwing) localPlayer.swings.push(nanos, packet) else if (packet.action == LocalHand.RESET_ATTACK) localPlayer.lastAttackNanos = nanos
             is LocalBlockChange -> level.setBlockState(PackedPosition.x(packet.position), PackedPosition.y(packet.position), PackedPosition.z(packet.position), packet.state)
             else -> Unit
         }
@@ -240,7 +242,7 @@ class ShadowClient26(override val identity: RecorderIdentity, knownProfiles: Mut
                 if (packet.entityId() == localPlayer.entityId) localPlayer.hurtAtNanos = nanos else entityMap[packet.entityId()]?.hurtAtNanos = nanos
             }
 
-            is ClientboundSwingAnimationPacket -> entityMap[packet.entityId()]?.swingAtNanos = nanos
+            is ClientboundSwingAnimationPacket -> entityMap[packet.entityId()]?.swings?.push(nanos, packet.hand(), packet.animation())
 
             is ClientboundPlayerInfoUpdatePacket -> {
                 players.apply(packet)

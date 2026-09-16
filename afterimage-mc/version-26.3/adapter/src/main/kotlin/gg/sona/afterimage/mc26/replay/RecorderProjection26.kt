@@ -12,6 +12,7 @@ import gg.sona.afterimage.mc26.mixin.RotateHeadInvoker
 import gg.sona.afterimage.mc26.mixin.UpdateAttributesInvoker
 import gg.sona.afterimage.mc26.state.ShadowClient26
 import gg.sona.afterimage.mc26.state.ShadowPlayers26
+import gg.sona.afterimage.mc26.state.ShadowSwings26
 import gg.sona.afterimage.net.CapturedPacket
 import gg.sona.afterimage.net.PackedPosition
 import gg.sona.afterimage.net.PacketDirection
@@ -19,6 +20,7 @@ import gg.sona.afterimage.protocol.AfterimageInternal
 import gg.sona.afterimage.protocol.InternalCodec
 import gg.sona.afterimage.protocol.LocalBlockBreak
 import gg.sona.afterimage.protocol.LocalPose
+import gg.sona.afterimage.protocol.LocalHand
 import gg.sona.afterimage.replay.consumer.DeliveryMode
 import gg.sona.afterimage.replay.consumer.ReplayConsumer
 import gg.sona.afterimage.replay.consumer.ResetReason
@@ -70,6 +72,7 @@ class RecorderProjection26(private val shadow: ShadowClient26, private val downs
     var mirrorHud: Boolean = true
     private var cameraPlaced = false
     private var dimension: String? = null
+    private var nativeSwings = false
 
     override fun onReset(reason: ResetReason) {
         recorderSpawned = false
@@ -336,6 +339,11 @@ class RecorderProjection26(private val shadow: ShadowClient26, private val downs
         if (AfterimageInternal.isInternal(packet.packetId)) {
             when (val internal = InternalCodec.decode(packet)) {
                 is LocalPose -> if (recorderSpawned) teleportRecorder(nanos, mode)
+                is LocalHand -> if (internal.isSwing) {
+                    nativeSwings = true
+                    swing(ShadowSwings26.handOf(internal), ShadowSwings26.animationOf(internal), nanos, mode)
+                } else if (mirrorHud) forward(packet, mode)
+
                 is LocalBlockBreak -> if (recorderSpawned) {
                     emit(ClientboundBlockDestructionPacket(recorderEntityId, blockPos(internal.position), internal.stage), nanos, mode)
                     forward(packet, mode)
@@ -388,9 +396,13 @@ class RecorderProjection26(private val shadow: ShadowClient26, private val downs
     }
 
     private fun swing(hand: InteractionHand, nanos: Long, mode: DeliveryMode, attack: Boolean = true) {
-        if (!recorderSpawned) return
+        if (nativeSwings) return
         val held = shadow.localPlayer.itemIn(if (hand == InteractionHand.MAIN_HAND) EquipmentSlot.MAINHAND else EquipmentSlot.OFFHAND)
-        val animation = if (attack) held.attackAnimation else held.interactAnimation
+        swing(hand, if (attack) held.attackAnimation else held.interactAnimation, nanos, mode)
+    }
+
+    private fun swing(hand: InteractionHand, animation: SwingAnimation, nanos: Long, mode: DeliveryMode) {
+        if (!recorderSpawned) return
         emit(ClientboundSwingAnimationPacket(recorderEntityId, hand, animation), nanos, mode)
         if (mirrorHud) emit(ClientboundSwingAnimationPacket(CAMERA_ENTITY_ID, hand, animation), nanos, mode)
     }
